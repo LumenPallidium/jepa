@@ -11,6 +11,8 @@ class ImagePatcher(torch.nn.Module):
         The height of the image
     w : int
         The width of the image
+    in_channels : int, optional
+        The number of channels in the image, by default 3
     patch_size : int or tuple of int, optional
         The size of the patches, by default 16
     """
@@ -42,6 +44,55 @@ class ImagePatcher(torch.nn.Module):
     def inverse(self, x):
         return self.inverse_layer(x)
     
+class ImagePatcher3D(torch.nn.Module):
+    """Similar to above, but 3D. Theoretically could make a general ND patcher
+    using custom einops strings, but over 3D does seem excessive.
+    
+    Parameters
+    ----------
+    h : int
+        The height of the image
+    w : int
+        The width of the image
+    d : int
+        The depth of the image
+    in_channels : int, optional
+        The number of channels in the image, by default 1
+    patch_size : int or tuple of int, optional
+        The size of the patches, by default 16
+    """
+    def __init__(self,
+                 h, w, d,
+                 in_channels = 1,
+                 patch_size = 16,):
+        super().__init__()
+
+        if isinstance(patch_size, int):
+            patch_size = (patch_size, patch_size, patch_size)
+        self.patch_size = patch_size
+        self.in_channels = in_channels
+
+        self.layer = Rearrange("... c (h p1) (w p2) (d p3) -> ... (h w d) (p1 p2 p3 c)",
+                                                   p1 = patch_size[0],
+                                                   p2 = patch_size[1],
+                                                   p3 = patch_size[2])
+        
+        self.inverse_layer = Rearrange("... (h1 w1 d1) (p1 p2 p3 c) -> ... c (h1 p1) (w1 p2) (d1 p3)",
+                                                           h1 = h // patch_size[0],
+                                                           w1 = w // patch_size[1],
+                                                           d1 = d // patch_size[2],
+                                                           p1 = patch_size[0],
+                                                           p2 = patch_size[1],
+                                                           p3 = patch_size[2],
+                                                           c = in_channels)
+    
+    def forward(self, x):
+        return self.layer(x)
+    
+    def inverse(self, x):
+        return self.inverse_layer(x)
+    
+# TODO : make this more than 2d, probably need a for loop
 class RectangleExtractor:
     """Given an already patched image, extracts rectangles from it. Returns
     indices of the patches composing the rectangle. Does not feel efficient.
@@ -128,9 +179,9 @@ class MaskedEmbedder(torch.nn.Module):
         self.n_targets = n_targets
         self.mask_token = torch.nn.Parameter(torch.randn(1, 1, embed_dim))
 
-        self.image_patcher = ImagePatcher(h, w, 
-                                          in_channels = in_channels,
-                                          patch_size = patch_size)
+        self.patcher = ImagePatcher(h, w, 
+                                    in_channels = in_channels,
+                                    patch_size = patch_size)
         self.embedding = torch.nn.Linear(self.in_dim, embed_dim)
 
         self.context_extractor = RectangleExtractor(h // patch_size[0],
@@ -155,7 +206,7 @@ class MaskedEmbedder(torch.nn.Module):
         return context, targets
         
     def forward(self, x):
-        x_patched = self.image_patcher(x)
+        x_patched = self.patcher(x)
         x_patched = self.embedding(x_patched)
 
         return x_patched

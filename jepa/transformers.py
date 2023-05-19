@@ -153,8 +153,6 @@ class Transformer(torch.nn.Module):
             x = x + ff(x)
         return x
     
-
-    
     def ema_update(self, new_model, decay = 0.99):
         for ema_param, new_param in zip(self.parameters(), new_model.parameters()):
             ema_param.data.copy_(ema_param.data * decay + (1 - decay) * new_param.data)
