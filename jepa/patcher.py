@@ -174,7 +174,7 @@ if __name__ == "__main__":
             x = [im2tensor(x_i[0]) for x_i in x]
             return torch.stack(x, dim = 0)
 
-        flowers = torchvision.datasets.Flowers102(root = "data/", split = "train", download = True)
+        flowers = torchvision.datasets.Flowers102(root = "../data/", split = "train", download = True)
         transform = torchvision.transforms.Compose([torchvision.transforms.RandomCrop(500),
                                                     torchvision.transforms.RandomHorizontalFlip(0.5),
                                                     torchvision.transforms.ToTensor()])

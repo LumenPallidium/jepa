@@ -9,7 +9,6 @@ class IJepa(torch.nn.Module):
                  in_channels = 3,
                  patch_size = 16,
                  embed_dim = 256,
-                 predictor_dim = 256,
                  n_targets = 4,
                  context_scale_fraction_range = (0.85, 1),
                  context_aspect_ratio_range = (1, 1),
@@ -44,7 +43,7 @@ class IJepa(torch.nn.Module):
                                            activation = transformer_activation)
         self.target_encoder = deepcopy(self.context_encoder).requires_grad_(False)
 
-        self.predictor = Transformer(predictor_dim,
+        self.predictor = Transformer(embed_dim,
                                      transformer_depth,
                                      heads = transformer_heads,
                                      head_dim = transformer_head_dim,
@@ -80,6 +79,8 @@ if __name__ == "__main__":
     import torchvision
     from tqdm import tqdm
     import matplotlib.pyplot as plt
+    import ssl
+    ssl._create_default_https_context = ssl._create_unverified_context
     
     im2tensor = torchvision.transforms.ToTensor()
 
@@ -94,40 +95,43 @@ if __name__ == "__main__":
     w = 500
     patch_size = 20
     n_targets = 4
+    n_epochs = 1
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     transform = torchvision.transforms.Compose([torchvision.transforms.RandomCrop((h, w)),
                                                 torchvision.transforms.RandomHorizontalFlip(0.5),
                                                 torchvision.transforms.ToTensor()])
 
-    flowers = torchvision.datasets.Flowers102(root = "data/", 
+    flowers = torchvision.datasets.Flowers102(root = "../data/", 
                                               split = "train", 
                                               download = True,
                                               transform = transform)
 
-    dataloader = torch.utils.data.DataLoader(flowers, 
-                                             batch_size = 8, 
-                                             shuffle = True,
-                                             collate_fn = collate)
+
     
-    model = IJepa(h, w, patch_size = patch_size, n_targets = n_targets)
+    model = IJepa(h, w, patch_size = patch_size, n_targets = n_targets).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr = 1e-3, weight_decay = 1e-4, amsgrad = True)
 
     losses = []
 
-    for i, x in tqdm(enumerate(dataloader)):
-        optimizer.zero_grad()
-        preds, x_targets = model(x)
+    for epoch in range(n_epochs):
+        dataloader = torch.utils.data.DataLoader(flowers, 
+                                                batch_size = 8, 
+                                                shuffle = True,
+                                                collate_fn = collate)
+        for i, x in tqdm(enumerate(dataloader)):
+            x = x.to(device)
+            optimizer.zero_grad()
+            preds, x_targets = model(x)
 
-        loss = 0
-        for pred, x_target in zip(preds, x_targets):
-            loss += torch.nn.functional.mse_loss(pred, x_target)
+            loss = 0
+            for pred, x_target in zip(preds, x_targets):
+                loss += torch.nn.functional.mse_loss(pred, x_target)
 
-        loss.backward()
-        optimizer.step()
-        losses.append(loss.item())
+            loss.backward()
+            optimizer.step()
+            losses.append(loss.item())
 
-        if i == 100:
-            break
 
     plt.plot(losses)
     
