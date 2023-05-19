@@ -1,27 +1,40 @@
 import torch
-import einops
+import numpy as np
 from einops.layers.torch import Rearrange
 
 class ImagePatcher(torch.nn.Module):
-    """Convenience layer for converting image to patches and vice versa."""
+    """Convenience layer for converting image to patches and vice versa.
+    
+    Parameters
+    ----------
+    h : int
+        The height of the image
+    w : int
+        The width of the image
+    patch_size : int or tuple of int, optional
+        The size of the patches, by default 16
+    """
     def __init__(self,
                  h, w,
+                 in_channels = 3,
                  patch_size = 16,):
         super().__init__()
 
         if isinstance(patch_size, int):
             patch_size = (patch_size, patch_size)
         self.patch_size = patch_size
+        self.in_channels = in_channels
 
-        self.layer = Rearrange("... (h p1) (w p2) -> ... (h w) (p1 p2)",
+        self.layer = Rearrange("... c (h p1) (w p2) -> ... (h w) (p1 p2 c)",
                                                    p1 = patch_size[0],
                                                    p2 = patch_size[1])
         
-        self.inverse_layer = Rearrange("... (h1 w1) (p1 p2) -> ... (h1 p1) (w1 p2)",
+        self.inverse_layer = Rearrange("... (h1 w1) (p1 p2 c) -> ... c (h1 p1) (w1 p2)",
                                                            h1 = h // patch_size[0],
                                                            w1 = w // patch_size[1],
                                                            p1 = patch_size[0],
-                                                           p2 = patch_size[1])
+                                                           p2 = patch_size[1],
+                                                           c = in_channels)
     
     def forward(self, x):
         return self.layer(x)
@@ -31,7 +44,18 @@ class ImagePatcher(torch.nn.Module):
     
 class RectangleExtractor:
     """Given an already patched image, extracts rectangles from it. Returns
-    indices of the patches composing the rectangle. Does not feel efficient."""
+    indices of the patches composing the rectangle. Does not feel efficient.
+    
+    Parameters
+    ----------
+    h : int
+        The height of the image
+    w : int
+        The width of the image
+    scale_fraction_range : tuple of float, optional
+        Range for the ratio of the extracted rectangle's width to the image's width
+    aspect_ratio_range : tuple of float, optional
+        Range for rectangle aspect ratios (height / width)"""
     def __init__(self,
                 h, w,
                 scale_fraction_range = (0.15, 0.2),
@@ -46,24 +70,21 @@ class RectangleExtractor:
         self.aspect_ratio_range = aspect_ratio_range
 
     def get_indices(self):
-        rec_width = torch.randint(low = int(self.w * self.scale_fraction_range[0]),
-                                    high = int(self.w * self.scale_fraction_range[1]),
-                                    size = (1,)).item()
+
+        low_w = int(self.w * self.scale_fraction_range[0])
+        high_w = int(self.w * self.scale_fraction_range[1])
+        rec_width = np.random.randint(low = low_w,
+                                      high = high_w + 1)
+        
         low_h = int(rec_width * self.aspect_ratio_range[0])
         high_h = int(rec_width * self.aspect_ratio_range[1])
-        if low_h == high_h:
-            rec_height = low_h
-        else:
-            rec_height = torch.randint(low = low_h,
-                                        high = high_h,
-                                        size = (1,)).item()
+        rec_height = np.random.randint(low = low_h,
+                                       high = high_h + 1)
 
-        start_index_w = torch.randint(low = 0,
-                                        high = self.w - rec_width,
-                                        size = (1,)).item()
-        start_index_h = torch.randint(low = 0,
-                                high = self.h - rec_height,
-                                size = (1,)).item()
+        start_index_w = np.random.randint(low = 0,
+                                          high = self.w - rec_width + 1)
+        start_index_h = np.random.randint(low = 0,
+                                          high = self.h - rec_height + 1)
         patch_start_ = start_index_h * self.w + start_index_w
         indices = [torch.arange(patch_start_ + i * self.w, 
                                 patch_start_ + i * self.w + rec_width) for i in range(rec_height)]
@@ -72,12 +93,75 @@ class RectangleExtractor:
         return indices
      
 def difference_of_indices(indices1, *indices2):
-    """Returns the indices in indices1 that are not in indices2 (which can be multiple tensors)"""
+    """Returns the indices in indices1 that are not in indices2 (which can be multiple tensors).
+    
+    Parameters
+    ----------
+    indices1 : torch.Tensor
+        The indices to be returned, with chunks taken out
+    indices2 : torch.Tensor
+        The indices to be removed from indices1, can be multiple tensors"""
     indices2 = torch.cat(indices2, dim = 0)
     bool_mask = torch.isin(indices1, indices2, invert = True)
     return indices1[bool_mask]
-        
 
+
+class MaskedEmbedder(torch.nn.Module):
+
+    def __init__(self,
+                 h, w,
+                 in_channels = 3,
+                 patch_size = 16,
+                 embed_dim = 256,
+                 n_targets = 4,
+                 context_scale_fraction_range = (0.85, 1),
+                 context_aspect_ratio_range = (1, 1),
+                 target_scale_fraction_range = (0.15, 0.25),
+                 target_aspect_ratio_range = (0.75, 1.5),):
+        super().__init__()
+
+        if isinstance(patch_size, int):
+            patch_size = (patch_size, patch_size)
+        self.patch_size = patch_size
+        self.in_dim = patch_size[0] * patch_size[1] * in_channels
+
+        self.n_targets = n_targets
+        self.mask_token = torch.nn.Parameter(torch.randn(1, 1, embed_dim))
+
+        self.image_patcher = ImagePatcher(h, w, 
+                                          in_channels = in_channels,
+                                          patch_size = patch_size)
+        self.embedding = torch.nn.Linear(self.in_dim, embed_dim)
+
+        self.context_extractor = RectangleExtractor(h // patch_size[0],
+                                                    w // patch_size[1],
+                                                    scale_fraction_range = context_scale_fraction_range,
+                                                    aspect_ratio_range = context_aspect_ratio_range)
+        self.target_extractor = RectangleExtractor(h // patch_size[0],
+                                                    w // patch_size[1],
+                                                    scale_fraction_range = target_scale_fraction_range,
+                                                    aspect_ratio_range = target_aspect_ratio_range)
+    def mask_indices(self, x, indices):
+        x_masked = x.clone()
+        x_masked[indices, :] = self.mask_token
+        return x_masked
+    
+    def get_indices(self):
+        context = self.context_extractor.get_indices()
+        targets = [self.target_extractor.get_indices() for _ in range(self.n_targets)]
+
+        context = difference_of_indices(context, *targets)
+
+        return context, targets
+        
+    def forward(self, x):
+        x_patched = self.image_patcher(x)
+        x_patched = self.embedding(x_patched)
+
+        return x_patched
+        
+        
+# TODO: method to mask out the non-context, non-target patches
 if __name__ == "__main__":
         import torchvision
         
@@ -104,6 +188,8 @@ if __name__ == "__main__":
         patch_size = 20
         n_targets = 4
 
+        # testing general classes
+
         context_extractor = RectangleExtractor(h // patch_size, 
                                                w // patch_size, 
                                                scale_fraction_range=(0.85, 1),
@@ -121,7 +207,7 @@ if __name__ == "__main__":
 
         context = context_extractor.get_indices()
 
-        context_im[:, context, :] = 1
+        context_im[context, :] = 1
 
         targets = []
         for i in range(n_targets):
@@ -129,5 +215,10 @@ if __name__ == "__main__":
         context = difference_of_indices(context, *targets)
 
         
-        context_im[:, context, :] = 0
+        context_im[context, :] = 0
         context_im = tensor2im(patcher.inverse(context_im))
+
+        # testing MaskedEmbedder
+        mask_embedder = MaskedEmbedder(h, w, patch_size = patch_size, n_targets = n_targets)
+        x_patched = mask_embedder(test.unsqueeze(0))
+        context, targets = mask_embedder.get_indices()
