@@ -1,5 +1,5 @@
 # JEPA
-This repository contains my experiments with Joint Embedding Predictive Architectures (JEPAs). It contains my barebones implementation of [I-JEPA (Image-JEPA)](https://arxiv.org/abs/2301.08243), which is this general architecture applied to the image domain.
+This repository contains my experiments with Joint Embedding Predictive Architectures (JEPAs). It contains my barebones implementation of [I-JEPA (Image-JEPA)](https://arxiv.org/abs/2301.08243), which is this general architecture applied to the image domain. [Yann LeCun thinks hierarchical JEPAs may be the basis for a future AGI.](https://openreview.net/pdf?id=BZ5a1r-kVsf)
 
 ## What are JEPAs?
 
