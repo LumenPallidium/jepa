@@ -158,7 +158,8 @@ def difference_of_indices(indices1, *indices2):
 
 
 class MaskedEmbedder(torch.nn.Module):
-
+    """This class handles patching, embedding patches, and pulling out context/target
+    patches of the right size"""
     def __init__(self,
                  h, w,
                  in_channels = 3,

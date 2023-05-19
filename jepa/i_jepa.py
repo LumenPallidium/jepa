@@ -41,6 +41,7 @@ class IJepa(torch.nn.Module):
                                            dropout = transformer_dropout,
                                            context = h * w // patch_size[0] // patch_size[1],
                                            activation = transformer_activation)
+        # no grad, this is updated via EMA
         self.target_encoder = deepcopy(self.context_encoder).requires_grad_(False)
 
         self.predictor = Transformer(embed_dim,
@@ -61,14 +62,18 @@ class IJepa(torch.nn.Module):
 
         x_context = x_patched.clone()
         x_context[:, ~context, :] = self.masked_embedder.mask_token
+        # note I filter to just the context patch after running through the encoder - seems consistent with paper figures
         context_encoded = self.context_encoder(x_context)[:, context, :]
 
-        # since shape is (batch, context, dim), we join at dim=1
+        # need these for filtering the posemb to the right spots
         indice_pairs = [torch.cat((target, context), dim = 0) for target in targets]
+        # create masks of right shape
         pred_targets = [self.masked_embedder.mask_token.repeat(context_encoded.shape[0], target.shape[0], 1) for target in targets]
+        # since shape is (batch, tokens, dim), we join at dim=1
         pred_pairs = [torch.cat((pred_target, context_encoded), dim = 1) for pred_target in pred_targets]
 
         preds = [self.predictor.predict(pred_pair, indice_pair) for pred_pair, indice_pair in zip(pred_pairs, indice_pairs)]
+        # filter to just the predicted target
         preds = [pred[:, :target.shape[0], :] for pred, target in zip(preds, targets)]
 
         self.target_encoder.ema_update(self.context_encoder)
