@@ -113,11 +113,13 @@ class Transformer(torch.nn.Module):
                  dropout = 0.,
                  positional_embedding= True,
                  context = None,
-                 activation = torch.nn.GELU):
+                 activation = torch.nn.GELU,
+                 ema_decay = 0.996,):
         super().__init__()
 
         self.dim = dim
         self.depth = depth
+        self.ema_decay = ema_decay
 
         if positional_embedding:
             assert context is not None, "Context must be provided if positional embedding is used"
@@ -153,7 +155,7 @@ class Transformer(torch.nn.Module):
             x = x + ff(x)
         return x
     
-    def ema_update(self, new_model, decay = 0.99):
+    def ema_update(self, new_model):
         for ema_param, new_param in zip(self.parameters(), new_model.parameters()):
-            ema_param.data.copy_(ema_param.data * decay + (1 - decay) * new_param.data)
+            ema_param.data.copy_(ema_param.data * self.ema_decay + (1 - self.ema_decay) * new_param.data)
         
