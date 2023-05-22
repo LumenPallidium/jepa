@@ -22,3 +22,11 @@ class WarmUpScheduler(object):
         else:
             self.scheduler.step()
         self.iter += 1
+
+def losses_to_running_loss(losses, alpha = 0.95):
+    running_losses = []
+    running_loss = losses[0]
+    for loss in losses:
+        running_loss = (1 - alpha) * loss + alpha * running_loss
+        running_losses.append(running_loss)
+    return running_losses

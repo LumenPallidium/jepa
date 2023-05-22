@@ -4,7 +4,6 @@ from tqdm import tqdm
 from copy import deepcopy
 from patcher import MaskedEmbedder
 from transformers import Transformer
-from utils import WarmUpScheduler
 
 class IJepa(torch.nn.Module):
     def __init__(self,
@@ -88,114 +87,5 @@ class IJepa(torch.nn.Module):
         # not sure if i should run this through the predictor - paper suggests no and that makes sense
         return x
 
-def validation_test(model, 
-                    dataset,
-                    device,
-                    n_categories = 101,
-                    probe_lr = 1e-3,
-                    probe_weight_decay = 1e-4,
-                    val_epochs = 1,):
-    """Tests the model at a point in its training. Freezes the weights,
-    stops the gradients, and trains a linear probe on the dataset"""
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size = 8, shuffle = True)
-    model.eval()
-    linear_probe = torch.nn.Linear(model.target_encoder.dim, n_categories).to(device)
-
-    optimizer = torch.optim.AdamW(linear_probe.parameters(), lr = probe_lr, weight_decay = probe_weight_decay, amsgrad = True)
-
-    for epoch in range(val_epochs):
-        epoch_scores = []
-        for x, y in tqdm(dataloader):
-            x = x.to(device)
-            y = y.to(device)
-
-            with torch.no_grad():
-                x = model.encode(x)
-            
-            optimizer.zero_grad()
-            logits = linear_probe(x).mean(dim = 1)
-            loss = torch.nn.functional.cross_entropy(logits, y)
-
-            top1_acc = (logits.argmax(dim = 1) == y).float().mean()
-            epoch_scores.append(top1_acc.item())
-
-            loss.backward()
-            optimizer.step()
-        print(f"\tVal Epoch {epoch + 1} - score: {np.mean(epoch_scores)}")
-    
-if __name__ == "__main__":
-    import torchvision
-    import matplotlib.pyplot as plt
-    import ssl
-    ssl._create_default_https_context = ssl._create_unverified_context
-    
-    im2tensor = torchvision.transforms.ToTensor()
-
-    def tensor2im(x):
-        return torchvision.transforms.ToPILImage()(x)
-
-    def collate(x):
-        x = [x_i[0] for x_i in x]
-        return torch.stack(x, dim = 0)
-    
-    h = 224
-    w = 224
-    patch_size = 16
-    n_targets = 4
-    n_epochs = 10
-    val_every = 5
-    batch_size = 32
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    transform = torchvision.transforms.Compose([torchvision.transforms.RandomResizedCrop((h, w)),
-                                                torchvision.transforms.RandomHorizontalFlip(0.5),
-                                                torchvision.transforms.ToTensor()])
-
-    food = torchvision.datasets.Food101(root = "C:/Projects/image_datasets/", 
-                                              split = "train", 
-                                              download = True,
-                                              transform = transform)
-    food_val = torchvision.datasets.Food101(root = "C:/Projects/image_datasets/",
-                                                  split = "test",
-                                                  download = True,
-                                                  transform = transform)
-
-
-    
-    model = IJepa(h, w, patch_size = patch_size, n_targets = n_targets).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr = 1e-3, weight_decay = 1e-4, amsgrad = True)
-
-    scheduler = WarmUpScheduler(optimizer = optimizer,
-                                scheduler = torch.optim.lr_scheduler.CosineAnnealingLR,
-                                warmup_iter = 128 * 15,
-                                total_iter = 128 * n_epochs) # 15 epochs of warmup
-
-    losses = []
-
-    for epoch in range(n_epochs):
-        print(f"Epoch {epoch + 1}")
-        if epoch % val_every == 0:
-           validation_test(model, food_val, device)
-
-        dataloader = torch.utils.data.DataLoader(food, 
-                                                batch_size = batch_size, 
-                                                shuffle = True,
-                                                collate_fn = collate)
-        for i, x in tqdm(enumerate(dataloader)):
-            x = x.to(device)
-            optimizer.zero_grad()
-            preds, x_targets = model(x)
-
-            loss = 0
-            for pred, x_target in zip(preds, x_targets):
-                loss += torch.nn.functional.mse_loss(pred, x_target)
-
-            loss.backward()
-            optimizer.step()
-            scheduler.step()
-            losses.append(loss.item())
-        print(f"\t\tDone. Final loss: {loss.item()}")
-
-    model.train()
-    plt.plot(losses)
+#TODO : energy transformers!!
     
