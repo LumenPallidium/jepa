@@ -4,7 +4,11 @@ patch_size : 16
 n_targets : 4 # number of target patches to use
 n_epochs : 10
 warmup_epoch_fraction : 8 # fraction of epochs to use for warmup, 1/8 by default
-val_every : 0 # run a linear probing validation task every n epochs, 0 means no validation
+
+val_every : 5 # run a linear probing validation task every n epochs, 0 means no validation
+test_type : knn # knn or linear
+
+
 batch_size : 64
 data_path : "C:/Projects/image_datasets/"
 

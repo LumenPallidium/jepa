@@ -56,6 +56,37 @@ def validation_test(model,
         print(f"\tVal Epoch {epoch + 1} - score: {np.mean(epoch_scores)}")
     model.train()
 
+def knn_test(model,
+             dataset,
+             device,
+             batch_size = 64,
+             k = 5):
+    # importing here cause it's unnecessary for the rest of the code
+    from sklearn.neighbors import KNeighborsClassifier
+
+    dataloader = torch.utils.data.DataLoader(dataset, 
+                                             batch_size = batch_size, 
+                                             shuffle = True)
+    model.eval()
+
+    knn = KNeighborsClassifier(n_neighbors = k)
+    X, y = [], []
+    for x, y_i in tqdm(dataloader):
+        x = x.to(device)
+        with torch.no_grad():
+            x = model.encode(x)
+            x = x.mean(dim = -2).cpu().numpy()
+        X.append(x)
+        y.append(y_i)
+    X = np.concatenate(X, axis = 0)
+    y = np.concatenate(y, axis = 0)
+
+    knn.fit(X, y)
+    print(f"KNN score: {knn.score(X, y)}")
+    
+    model.train()
+
+
 #TODO : break into functions
 #TODO : saving, loading pts
 #TODO : better metric logging
@@ -63,6 +94,8 @@ def validation_test(model,
 
 if __name__ == "__main__":
     config = yaml.safe_load(open("../config/training.yml", "r"))
+
+    test_function = knn_test if config["test_type"] == "knn" else validation_test
 
     warmup_epochs = config["n_epochs"] / config["warmup_epoch_fraction"]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -102,7 +135,7 @@ if __name__ == "__main__":
     for epoch in range(config["n_epochs"]):
         print(f"Epoch {epoch + 1}")
         if (config["val_every"] != 0) and (epoch % config["val_every"] == 0):
-            validation_test(model, data_val, device)
+            test_function(model, data_val, device)
 
         dataloader = torch.utils.data.DataLoader(data, 
                                                  batch_size = config["batch_size"], 
