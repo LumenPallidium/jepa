@@ -4,6 +4,12 @@ from tqdm import tqdm
 from copy import deepcopy
 from patcher import MaskedEmbedder
 from transformers import Transformer
+try:
+    from energy_transformer import EnergyTransformer
+    ET_AVAILABLE = True
+except ImportError:
+    ET_AVAILABLE = False
+    print("EnergyTransformer not available. See the readme if you want to install it.")
 
 class IJepa(torch.nn.Module):
     def __init__(self,
@@ -36,8 +42,8 @@ class IJepa(torch.nn.Module):
                                               target_scale_fraction_range = target_scale_fraction_range,
                                               target_aspect_ratio_range = target_aspect_ratio_range,)
         
-        self.context_encoder = Transformer(embed_dim,
-                                           transformer_depth,
+        self.context_encoder = Transformer(dim = embed_dim,
+                                           depth = transformer_depth,
                                            heads = transformer_heads,
                                            head_dim = transformer_head_dim,
                                            dropout = transformer_dropout,
@@ -46,8 +52,8 @@ class IJepa(torch.nn.Module):
         # no grad, this is updated via EMA
         self.target_encoder = deepcopy(self.context_encoder).requires_grad_(False)
 
-        self.predictor = Transformer(embed_dim,
-                                     transformer_depth,
+        self.predictor = Transformer(dim = embed_dim,
+                                     depth = transformer_depth,
                                      heads = transformer_heads,
                                      head_dim = transformer_head_dim,
                                      dropout = transformer_dropout,

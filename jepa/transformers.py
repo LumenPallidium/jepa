@@ -94,9 +94,9 @@ class Transformer(torch.nn.Module):
     
     Parameters
     ----------
-    dim : int
+    dim : int, optional
         The dimension of the residual stream
-    depth : int
+    depth : int, optional
         The number of attention and feed forward layers
     heads : int, optional
         The number of attention heads, by default 8
@@ -104,10 +104,16 @@ class Transformer(torch.nn.Module):
         The dimension of the subspaces of the attention heads, by default 64
     dropout : float, optional
         The dropout rate, by default 0.
+    positional_embedding : bool, optional
+        Whether to use a positional embedding, by default True
+    context : int, optional
+        The number of context frames, by default None
+    activation : torch.nn.Module, optional
+        The activation function, by default torch.nn.GELU
     """
     def __init__(self, 
-                 dim, 
-                 depth, 
+                 dim = 512, 
+                 depth = 4, 
                  heads = 8, 
                  head_dim = 64,
                  dropout = 0.,

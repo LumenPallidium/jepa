@@ -162,6 +162,7 @@ cython_debug/
 # folders
 /data
 /applications
+/models
 
 # data files
 *.csv

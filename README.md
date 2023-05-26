@@ -1,6 +1,11 @@
 # JEPA
 This repository contains my experiments with Joint Embedding Predictive Architectures (JEPAs). It contains my barebones implementation of [I-JEPA (Image-JEPA)](https://arxiv.org/abs/2301.08243), which is this general architecture applied to the image domain. [Yann LeCun thinks hierarchical JEPAs may be the basis for a future AGI.](https://openreview.net/pdf?id=BZ5a1r-kVsf)
 
+## Getting started
+The main libraries you will need are torch, torchvision, einops, and tqdm. I will add a requirements or environment file soon but am holding off as things are still WIP.
+
+If you want to use the EnergyJepa, you'll have to [have that installed from my implementation](https://github.com/LumenPallidium/energy_transformer) (or you could just copy the main file from that repository to this repository's folders).
+
 ## What are JEPAs?
 
 JEPAs are architectures that utilize self-superivsed learning in order to learn a semantically rich embedding of data. They are predictive in the sense that they are trained to predict the embedding of given portions of data from other embedded portions.
