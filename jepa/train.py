@@ -3,6 +3,7 @@ import torchvision
 import yaml
 import os
 import numpy as np
+import einops
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from jepa import IJepa
@@ -78,13 +79,36 @@ def generate_val_data(model, dataset, device, batch_size = 64):
 
     return X, y
 
+def coerce_shape(X, y = None, reduce = False, sample = 0.1):
+    if reduce:
+        X = X.mean(dim = 1)
+    else:
+        if y is not None:
+            lengths = X.shape[1]
+            y = y.unsqueeze(1).repeat(1, lengths).flatten()
+
+        X = einops.rearrange(X, "b l d -> (b l) d")
+
+        if sample < 1:
+            n_samples = int(sample * X.shape[0])
+            perm = torch.randperm(X.shape[0])[:n_samples]
+            X = X[perm, :]
+            if y is not None:
+                y = y[perm]
+    return X, y
+
 def knn_test(X : torch.Tensor, 
              y : torch.Tensor,
-             k : int = 5):
+             k : int = 5,
+             coerce_shape = True,
+             reduce = False,
+             sample = 0.002):
     # importing here cause it's unnecessary for the rest of the code
     from sklearn.neighbors import KNeighborsClassifier
-    from sklearn.manifold import locally_linear_embedding
 
+    if coerce_shape and (len(X.shape) > 2):
+        X, y = coerce_shape(X, y = y, reduce = reduce, sample = sample)
+    
     X_np = X.cpu().numpy()
     y_np = y.cpu().numpy()
     
@@ -95,9 +119,17 @@ def knn_test(X : torch.Tensor,
     knn.fit(X_np, y_np)
     print(f"Done.\n\tKNN score: {knn.score(X_np, y_np)}\nEmbedding in 2D and plotting...", end = "")
 
+def plot_embedding(X, y, k = 5, coerce_shape = True, reduce = False, sample = 0.002, lle_method = "modified"):
+    from sklearn.manifold import locally_linear_embedding
+    from sklearn.preprocessing import StandardScaler
+    if coerce_shape and (len(X.shape) > 2):
+        X, y  = coerce_shape(X, y = y, reduce = reduce, sample = sample)
 
-    # create an embedding for visualization
-    X_embedded, err = locally_linear_embedding(X_np, n_neighbors = k, n_components = 2)
+    X_np = X.cpu().numpy()
+    X_np = StandardScaler().fit_transform(X_np)
+
+    y_np = y.cpu().numpy()
+    X_embedded, err = locally_linear_embedding(X_np, n_neighbors = k, n_components = 2, method = lle_method)
     # plot it, with colors corresponding to the true labels
     fig, ax = plt.subplots(figsize = (8, 6))
     ax.scatter(X_embedded[:, 0], X_embedded[:, 1], c = y_np, cmap = "tab10", s = 1, alpha = 0.1)
@@ -105,8 +137,11 @@ def knn_test(X : torch.Tensor,
     fig.savefig("../plots/embedding.png", dpi = 300)
 
 
-def corr_dimension(X, log_eps = np.linspace(-2, 0, 10), base = 10, plot = False):
+def corr_dimension(X, log_eps = np.linspace(-2, 0, 10), base = 10, plot = False, coerce_shape = True, reduce = False, sample = 0.002):
     """Correlation dimension, assumes X has already been stacked or reduced and is shape (n, dim)"""
+    if coerce_shape and (len(X.shape) > 2):
+        X, _ = coerce_shape(X, reduce = reduce, sample = sample)
+
     eps = list(base ** log_eps)
     log_eps = list(log_eps)
 
@@ -128,6 +163,7 @@ def corr_dimension(X, log_eps = np.linspace(-2, 0, 10), base = 10, plot = False)
     corr_integrals = corr_integrals[max_i + 1:]
     log_corr_integrals = np.log(corr_integrals)
     if plot:
+        os.makedirs("../plots/", exist_ok = True)
         fig, ax = plt.subplots(figsize = (8, 6))
         ax.plot(log_eps, log_corr_integrals)
         ax.set_xlabel("log(eps)")
@@ -155,6 +191,12 @@ def run_tests(test_list, model, data_val, device):
                 X, y = generate_val_data(model, data_val, device)
                 data_generated = True
             corr_dimension(X)
+        elif test == "plot":
+            # not technically a test :)
+            if not data_generated:
+                X, y = generate_val_data(model, data_val, device)
+                data_generated = True
+            plot_embedding(X, y)
         elif test == "linear_probe":
             linear_probe_test(model, data_val, device)
         else:
@@ -162,7 +204,6 @@ def run_tests(test_list, model, data_val, device):
 
 #TODO : break into functions
 #TODO : saving, loading pts
-#TODO : better metric logging
 
 if __name__ == "__main__":
     config = yaml.safe_load(open("../config/training.yml", "r"))

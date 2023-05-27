@@ -6,7 +6,7 @@ n_epochs : 10
 warmup_epoch_fraction : 8 # fraction of epochs to use for warmup, 1/8 by default
 
 val_every : 4 # run a linear probing validation task every n epochs, 0 means no validation
-tests : ["corr_dim"]
+tests : ["corr_dim", "plot"]
 
 
 batch_size : 64
