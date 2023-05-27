@@ -127,6 +127,7 @@ class RectangleExtractor:
         rec_width = np.random.randint(low = low_w,
                                       high = high_w + 1)
         
+        # TODO: this might be an issue - eg 0.2 * 1.5 = 0.3, 0.75 * 0.15 ~ 0.11
         low_h = int(rec_width * self.aspect_ratio_range[0])
         high_h = int(rec_width * self.aspect_ratio_range[1])
         rec_height = np.random.randint(low = low_h,

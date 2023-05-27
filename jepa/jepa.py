@@ -63,6 +63,7 @@ class IJepa(torch.nn.Module):
     def forward(self, x):
         x_patched = self.masked_embedder(x)
         # using single indices for each batch - consistency is easier
+        #TODO : however, this is not consistent with the paper
         context, targets = self.masked_embedder.get_indices()
 
         target_encoded = self.target_encoder(x_patched)

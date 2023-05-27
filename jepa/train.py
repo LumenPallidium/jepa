@@ -89,8 +89,11 @@ def coerce_shape(X, y = None, reduce = False, sample = 0.1):
 
         X = einops.rearrange(X, "b l d -> (b l) d")
 
-        if sample < 1:
-            n_samples = int(sample * X.shape[0])
+        if sample is not None:
+            if sample < 1:
+                n_samples = int(sample * X.shape[0])
+            else:
+                n_samples = int(sample)
             perm = torch.randperm(X.shape[0])[:n_samples]
             X = X[perm, :]
             if y is not None:
@@ -105,16 +108,17 @@ def knn_test(X : torch.Tensor,
              sample = 0.002):
     # importing here cause it's unnecessary for the rest of the code
     from sklearn.neighbors import KNeighborsClassifier
+    from sklearn.preprocessing import StandardScaler
 
     if coerce_shape and (len(X.shape) > 2):
         X, y = coerce_shape(X, y = y, reduce = reduce, sample = sample)
     
     X_np = X.cpu().numpy()
+    X_np = StandardScaler().fit_transform(X_np)
     y_np = y.cpu().numpy()
     
     knn = KNeighborsClassifier(n_neighbors = k)
     
-
     print("All images embedded, fitting KNN...", end = "")
     knn.fit(X_np, y_np)
     print(f"Done.\n\tKNN score: {knn.score(X_np, y_np)}\nEmbedding in 2D and plotting...", end = "")
@@ -127,8 +131,8 @@ def plot_embedding(X, y, k = 5, coerce_shape = True, reduce = False, sample = 0.
 
     X_np = X.cpu().numpy()
     X_np = StandardScaler().fit_transform(X_np)
-
     y_np = y.cpu().numpy()
+
     X_embedded, err = locally_linear_embedding(X_np, n_neighbors = k, n_components = 2, method = lle_method)
     # plot it, with colors corresponding to the true labels
     fig, ax = plt.subplots(figsize = (8, 6))
@@ -233,7 +237,8 @@ if __name__ == "__main__":
                   n_targets = config["n_targets"]).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), 
                                   lr = config["lr"], 
-                                  weight_decay = config["weight_decay"], 
+                                  weight_decay = config["weight_decay"],
+                                  betas = (config["beta1"], config["beta2"]),
                                   amsgrad = True)
 
     scheduler = WarmUpScheduler(optimizer = optimizer,
