@@ -179,7 +179,6 @@ class MaskedEmbedder(torch.nn.Module):
         self.in_dim = patch_size[0] * patch_size[1] * in_channels
 
         self.n_targets = n_targets
-        self.mask_token = torch.nn.Parameter(torch.randn(1, 1, embed_dim))
 
         self.patcher = ImagePatcher(h, w, 
                                     in_channels = in_channels,
@@ -194,10 +193,6 @@ class MaskedEmbedder(torch.nn.Module):
                                                     w // patch_size[1],
                                                     scale_fraction_range = target_scale_fraction_range,
                                                     aspect_ratio_range = target_aspect_ratio_range)
-    def mask_indices(self, x, indices):
-        x_masked = x.clone()
-        x_masked[indices, :] = self.mask_token
-        return x_masked
     
     def get_indices(self):
         context = self.context_extractor.get_indices()

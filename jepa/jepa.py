@@ -32,6 +32,8 @@ class IJepa(torch.nn.Module):
         if isinstance(patch_size, int):
             patch_size = (patch_size, patch_size)
 
+        self.mask_token = torch.nn.Parameter(torch.randn(1, 1, embed_dim))
+
         self.masked_embedder = MaskedEmbedder(h, w,
                                               in_channels = in_channels,
                                               patch_size = patch_size,
@@ -60,24 +62,22 @@ class IJepa(torch.nn.Module):
                                      context = h * w // patch_size[0] // patch_size[1],
                                      activation = transformer_activation)
         
-    def forward(self, x):
+    def forward_part(self, x):
+        """The forward operation for a single item in a batch."""
         x_patched = self.masked_embedder(x)
-        # using single indices for each batch - consistency is easier
-        #TODO : however, this is not consistent with the paper
         context, targets = self.masked_embedder.get_indices()
 
         target_encoded = self.target_encoder(x_patched)
         x_targets = [target_encoded[:, target, :] for target in targets]
 
-        x_context = x_patched.clone()
-        x_context[:, ~context, :] = self.masked_embedder.mask_token
-        # note I filter to just the context patch after running through the encoder - seems consistent with paper figures
-        context_encoded = self.context_encoder(x_context)[:, context, :]
+        # .predict method filters the posemb to the context
+        context_encoded = self.context_encoder.predict(x_patched[context, :], 
+                                                       context)
 
         # need these for filtering the posemb to the right spots
         indice_pairs = [torch.cat((target, context), dim = 0) for target in targets]
         # create masks of right shape
-        pred_targets = [self.masked_embedder.mask_token.repeat(context_encoded.shape[0], target.shape[0], 1) for target in targets]
+        pred_targets = [self.mask_token.repeat(context_encoded.shape[0], target.shape[0], 1) for target in targets]
         # since shape is (batch, tokens, dim), we join at dim=1
         pred_pairs = [torch.cat((pred_target, context_encoded), dim = 1) for pred_target in pred_targets]
 
@@ -86,6 +86,11 @@ class IJepa(torch.nn.Module):
         preds = [pred[:, :target.shape[0], :] for pred, target in zip(preds, targets)]
 
         self.target_encoder.ema_update(self.context_encoder)
+        return preds, x_targets
+    
+    def forward(self, x):
+        """The forward operation. Uses vmap so that we can have different contexts,targets for each image in the batch."""
+        preds, x_targets = torch.vmap(self.forward_part, randomness = "different")(x)
         return preds, x_targets
     
     def encode(self, x):

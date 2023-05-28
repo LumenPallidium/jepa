@@ -152,8 +152,7 @@ class Transformer(torch.nn.Module):
         """Given a tensor of the form [context, masked target] and indices describing where on the image
         they come from, add positional embedding and pass through the transformer."""
         # TODO: look into vmap instead of repeat here
-        pos_embedding = self.pos_embedding.repeat(x.shape[0], 1, 1)
-        pos_embedding = pos_embedding[:, indices, :]
+        pos_embedding = self.pos_embedding[:, indices, :]
 
         x = x + pos_embedding
         for attention, ff in self.layers:
