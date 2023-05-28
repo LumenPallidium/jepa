@@ -120,8 +120,7 @@ class RectangleExtractor:
         self.scale_fraction_range = scale_fraction_range
         self.aspect_ratio_range = aspect_ratio_range
 
-    def get_indices(self):
-
+    def get_rec_hw(self):
         low_w = int(self.w * self.scale_fraction_range[0])
         high_w = int(self.w * self.scale_fraction_range[1])
         rec_width = np.random.randint(low = low_w,
@@ -132,15 +131,25 @@ class RectangleExtractor:
         high_h = int(rec_width * self.aspect_ratio_range[1])
         rec_height = np.random.randint(low = low_h,
                                        high = high_h + 1)
+        
+        return rec_width, rec_height
 
-        start_index_w = np.random.randint(low = 0,
-                                          high = self.w - rec_width + 1)
-        start_index_h = np.random.randint(low = 0,
-                                          high = self.h - rec_height + 1)
-        patch_start_ = start_index_h * self.w + start_index_w
-        indices = [torch.arange(patch_start_ + i * self.w, 
-                                patch_start_ + i * self.w + rec_width) for i in range(rec_height)]
-        indices = torch.cat(indices, dim = 0)
+    def get_indices(self, rec_width, rec_height, batch_size = 1):
+
+        indices = []
+        # TODO : look into more efficient way of doing this
+        for _ in range(batch_size):
+            start_index_w = np.random.randint(low = 0,
+                                            high = self.w - rec_width + 1)
+            start_index_h = np.random.randint(low = 0,
+                                            high = self.h - rec_height + 1)
+            patch_start_ = start_index_h * self.w + start_index_w
+            indices_i = [torch.arange(patch_start_ + i * self.w, 
+                                    patch_start_ + i * self.w + rec_width) for i in range(rec_height)]
+            indices_i = torch.cat(indices_i, dim = 0)
+            indices.append(indices_i)
+
+        indices = torch.stack(indices, dim = 0)
 
         return indices
      
@@ -153,8 +162,11 @@ def difference_of_indices(indices1, *indices2):
         The indices to be returned, with chunks taken out
     indices2 : torch.Tensor
         The indices to be removed from indices1, can be multiple tensors"""
-    indices2 = torch.cat(indices2, dim = 0)
-    bool_mask = torch.isin(indices1, indices2, invert = True)
+    indices2 = torch.cat(indices2, dim = 1)
+    #
+    #bool_mask = torch.isin(indices1, indices2, invert = True)
+    # vmap here cause we want to do this for each batch (this throws a warning cause vmap + isin unoptimized atm)
+    bool_mask = torch.func.vmap(lambda x, y: torch.isin(x, y, invert = True))(indices1, indices2)
     return indices1[bool_mask]
 
 
@@ -170,7 +182,8 @@ class MaskedEmbedder(torch.nn.Module):
                  context_scale_fraction_range = (0.85, 1),
                  context_aspect_ratio_range = (1, 1),
                  target_scale_fraction_range = (0.15, 0.25),
-                 target_aspect_ratio_range = (0.75, 1.5),):
+                 target_aspect_ratio_range = (0.75, 1.5),
+                 frozen_embedding = False):
         super().__init__()
 
         if isinstance(patch_size, int):
@@ -186,6 +199,10 @@ class MaskedEmbedder(torch.nn.Module):
                                     patch_size = patch_size)
         self.embedding = torch.nn.Linear(self.in_dim, embed_dim)
 
+        # a paper suggests that this can improve self-distillation models
+        if frozen_embedding:
+            self.embedding.requires_grad_(False)
+
         self.context_extractor = RectangleExtractor(h // patch_size[0],
                                                     w // patch_size[1],
                                                     scale_fraction_range = context_scale_fraction_range,
@@ -194,14 +211,18 @@ class MaskedEmbedder(torch.nn.Module):
                                                     w // patch_size[1],
                                                     scale_fraction_range = target_scale_fraction_range,
                                                     aspect_ratio_range = target_aspect_ratio_range)
+        
     def mask_indices(self, x, indices):
         x_masked = x.clone()
         x_masked[indices, :] = self.mask_token
         return x_masked
     
-    def get_indices(self):
-        context = self.context_extractor.get_indices()
-        targets = [self.target_extractor.get_indices() for _ in range(self.n_targets)]
+    def get_indices(self, batch_size = 1):
+        context_hw = self.context_extractor.get_rec_hw()
+        target_hw = self.target_extractor.get_rec_hw()
+
+        context = self.context_extractor.get_indices(*context_hw, batch_size = batch_size)
+        targets = [self.target_extractor.get_indices(*target_hw, batch_size = batch_size) for _ in range(self.n_targets)]
 
         context = difference_of_indices(context, *targets)
 
@@ -214,7 +235,7 @@ class MaskedEmbedder(torch.nn.Module):
         return x_patched
         
         
-# TODO: method to mask out the non-context, non-target patches
+# TODO : look into having different sizes for batch of context blocks (probably won't work in general)
 if __name__ == "__main__":
         import torchvision
         
@@ -231,10 +252,7 @@ if __name__ == "__main__":
         transform = torchvision.transforms.Compose([torchvision.transforms.RandomCrop(500),
                                                     torchvision.transforms.RandomHorizontalFlip(0.5),
                                                     torchvision.transforms.ToTensor()])
-        # dataloader = torch.utils.data.DataLoader(cifar, 
-        #                                         batch_size = 32, 
-        #                                         shuffle = True,
-        #                                         collate_fn = collate)
+
         
         h = 500
         w = 500
@@ -258,13 +276,15 @@ if __name__ == "__main__":
 
         context_im = test_patched.clone()
 
-        context = context_extractor.get_indices()
+        context_hw = context_extractor.get_rec_hw()
+        context = context_extractor.get_indices(*context_hw)
 
         context_im[context, :] = 1
 
         targets = []
+        target_hw = target_extractor.get_rec_hw()
         for i in range(n_targets):
-            targets.append(target_extractor.get_indices())
+            targets.append(target_extractor.get_indices(*target_hw))
         context = difference_of_indices(context, *targets)
 
         
