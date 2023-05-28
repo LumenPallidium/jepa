@@ -148,7 +148,7 @@ class Transformer(torch.nn.Module):
             x = x + ff(x)
         return x
     
-    def predict(self, x, indices):
+    def filtered_forward(self, x, indices):
         """Given a tensor of the form [context, masked target] and indices describing where on the image
         they come from, add positional embedding and pass through the transformer."""
         # TODO: look into vmap instead of repeat here

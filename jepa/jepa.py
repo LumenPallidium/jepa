@@ -70,9 +70,9 @@ class IJepa(torch.nn.Module):
         target_encoded = self.target_encoder(x_patched)
         x_targets = [target_encoded[:, target, :] for target in targets]
 
-        # .predict method filters the posemb to the context
-        context_encoded = self.context_encoder.predict(x_patched[context, :], 
-                                                       context)
+        # .filtered_forward method filters the posemb to the context
+        context_encoded = self.context_encoder.filtered_forward(x_patched[context, :], 
+                                                                context)
 
         # need these for filtering the posemb to the right spots
         indice_pairs = [torch.cat((target, context), dim = 0) for target in targets]
@@ -81,7 +81,7 @@ class IJepa(torch.nn.Module):
         # since shape is (batch, tokens, dim), we join at dim=1
         pred_pairs = [torch.cat((pred_target, context_encoded), dim = 1) for pred_target in pred_targets]
 
-        preds = [self.predictor.predict(pred_pair, indice_pair) for pred_pair, indice_pair in zip(pred_pairs, indice_pairs)]
+        preds = [self.predictor.filtered_forward(pred_pair, indice_pair) for pred_pair, indice_pair in zip(pred_pairs, indice_pairs)]
         # filter to just the predicted target
         preds = [pred[:, :target.shape[0], :] for pred, target in zip(preds, targets)]
 
