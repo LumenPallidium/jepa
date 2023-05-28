@@ -26,8 +26,7 @@ class IJepa(torch.nn.Module):
                  transformer_heads = 8,
                  transformer_head_dim = 64,
                  transformer_dropout = 0.2,
-                 transformer_activation = torch.nn.GELU,
-                 frozen_embedding = False,):
+                 transformer_activation = torch.nn.GELU,):
         super().__init__()
 
         if isinstance(patch_size, int):
@@ -41,8 +40,7 @@ class IJepa(torch.nn.Module):
                                               context_scale_fraction_range = context_scale_fraction_range,
                                               context_aspect_ratio_range = context_aspect_ratio_range,
                                               target_scale_fraction_range = target_scale_fraction_range,
-                                              target_aspect_ratio_range = target_aspect_ratio_range,
-                                              frozen_embedding = frozen_embedding)
+                                              target_aspect_ratio_range = target_aspect_ratio_range,)
         
         self.context_encoder = Transformer(dim = embed_dim,
                                            depth = transformer_depth,
@@ -63,19 +61,18 @@ class IJepa(torch.nn.Module):
                                      activation = transformer_activation)
         
     def forward(self, x):
-        batch_size = x.shape[0]
         x_patched = self.masked_embedder(x)
-        # currently these have the same h,w in a batch, but cover different spots
-        # this seems consistent with Appendix A.1 in the paper, but hard to tell (having different h,w seems impossible if you want to stack?)
-        context, targets = self.masked_embedder.get_indices(batch_size = batch_size)
+        # using single indices for each batch - consistency is easier
+        #TODO : however, this is not consistent with the paper
+        context, targets = self.masked_embedder.get_indices()
 
         target_encoded = self.target_encoder(x_patched)
-        x_targets = [target_encoded[target, :] for target in targets]
+        x_targets = [target_encoded[:, target, :] for target in targets]
 
         x_context = x_patched.clone()
-        x_context[~context, :] = self.masked_embedder.mask_token
+        x_context[:, ~context, :] = self.masked_embedder.mask_token
         # note I filter to just the context patch after running through the encoder - seems consistent with paper figures
-        context_encoded = self.context_encoder(x_context)[context, :]
+        context_encoded = self.context_encoder(x_context)[:, context, :]
 
         # need these for filtering the posemb to the right spots
         indice_pairs = [torch.cat((target, context), dim = 0) for target in targets]

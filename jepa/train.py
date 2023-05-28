@@ -208,7 +208,6 @@ def run_tests(test_list, model, data_val, device):
 
 #TODO : break into functions
 #TODO : saving, loading pts
-#TODO : grad accumulation
 
 if __name__ == "__main__":
     config = yaml.safe_load(open("../config/training.yml", "r"))
