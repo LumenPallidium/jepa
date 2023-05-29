@@ -62,8 +62,6 @@ class JepaSkeleton(torch.nn.Module):
         # not sure if i should run this through the predictor - paper suggests no and that makes sense
         return x
 
-
-
 class IJepa(JepaSkeleton):
     """The original IJepa model from the paper. Uses a VIT-style transformer for the context encoder.
     Essentially initializes the skeleton with VITs and the methods needed."""
@@ -79,7 +77,6 @@ class IJepa(JepaSkeleton):
                  target_aspect_ratio_range = (0.75, 1.5),
                  transformer_depth = 6,
                  transformer_heads = 8,
-                 transformer_head_dim = 64,
                  transformer_dropout = 0.2,
                  transformer_activation = torch.nn.GELU,):
 
@@ -99,7 +96,6 @@ class IJepa(JepaSkeleton):
         context_encoder = Transformer(dim = embed_dim,
                                      depth = transformer_depth,
                                      heads = transformer_heads,
-                                     head_dim = transformer_head_dim,
                                      dropout = transformer_dropout,
                                      context = h * w // patch_size[0] // patch_size[1],
                                      activation = transformer_activation)
@@ -107,7 +103,6 @@ class IJepa(JepaSkeleton):
         predictor = Transformer(dim = embed_dim,
                                 depth = transformer_depth,
                                 heads = transformer_heads,
-                                head_dim = transformer_head_dim,
                                 dropout = transformer_dropout,
                                 context = h * w // patch_size[0] // patch_size[1],
                                 activation = transformer_activation)
@@ -146,4 +141,5 @@ class IJepa(JepaSkeleton):
         
 
 #TODO : energy transformers!!
+#TODO : look into adding VICReg losses on the encoders
     

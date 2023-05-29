@@ -20,16 +20,16 @@ class Attention2d(torch.nn.Module):
         Whether to use bias in the linear layers, by default False"""
     def __init__(self, 
                  dim,
-                 dim_head = 64,
                  n_heads = 8,
                  dropout = 0.,
                  bias = False):
         super().__init__()
         self.dim = dim
-        self.dim_head = dim_head
         self.n_heads = n_heads
+        self.dim_head = dim // n_heads
+
         self.dropout = dropout
-        self.inner_dim = dim_head * n_heads
+        self.inner_dim = self.dim_head * n_heads
 
         self.norm = torch.nn.LayerNorm(dim)
 
@@ -115,7 +115,6 @@ class Transformer(torch.nn.Module):
                  dim = 512, 
                  depth = 4, 
                  heads = 8, 
-                 head_dim = 64,
                  dropout = 0.,
                  positional_embedding= True,
                  context = None,
@@ -136,7 +135,7 @@ class Transformer(torch.nn.Module):
         self.layers = torch.nn.ModuleList([])
         for _ in range(depth):
             self.layers.append(torch.nn.ModuleList([
-                Attention2d(dim, n_heads = heads, dim_head = head_dim, dropout = dropout),
+                Attention2d(dim, n_heads = heads, dropout = dropout),
                 FeedForward(dim, dim, dropout = dropout, activation = activation)
             ]))
 
