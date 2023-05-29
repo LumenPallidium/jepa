@@ -6,6 +6,7 @@ The main libraries you will need are torch, torchvision, einops, and tqdm. I wil
 
 If you want to use the EnergyJepa, you'll have to [have that installed from my implementation](https://github.com/LumenPallidium/energy_transformer) (or you could just copy the main file from that repository to this repository's folders).
 
+
 ## What are JEPAs?
 
 JEPAs are architectures that utilize self-superivsed learning in order to learn a semantically rich embedding of data. They are predictive in the sense that they are trained to predict the embedding of given portions of data from other embedded portions.
@@ -14,10 +15,17 @@ I-JEPA use a framework in which there are three networks: a context encoder, a t
 
 In this way, the model learns the structure of image, all while working in an embedding space. This is enabled by the fact that the predictor must learn to accurately predict. An advantage of this method compared with something like a (masked) autoencoder is that there is no limitation from a decoder. Not only does a decoder add more parameters to a model, it also adds a task which could in principle be harder than forming a strong representation of a given dataset's manifold (namely, the task of converting an object on that manifold to an object in a measurement space e.g. an image).
 
-## Notes
 
+## Implementation Notes
+
+### Cropping/Masking
 As an additional note, I'll describe how I intepreted some parts of the paper which I felt left some openness to intepretation (at this point I'm assuming you've looked through the paper). The following image shows a figure from the text describing the functioning of the I-JEPA along with a relevant section of text:
 
 ![Description from paper](images/example.png)
 
 For the predictor, I assumed that the input was in the form of a concatenation of a masked target region and the encoded context. Positional information was naturally added via a predictor-specific learnable postional embedding, filtered to only given target and the context.
+
+## Batch Masks
+Initially, I used the same masks for every image in a batch. I think this led to some issues with gradients, as it to an eventual exponential increase in loss far on in training (which I noticed when I saw that small batches didn't have this issue to the same extent). To ameliorate this, I updated the model to vmap a non-batched forward step, so that I could have different size context and target masks (since different size tensors can't be stacked in general).
+
+

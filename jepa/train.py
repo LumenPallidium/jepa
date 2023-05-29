@@ -69,7 +69,6 @@ def generate_val_data(model, dataset, device, batch_size = 64):
         x = x.to(device)
         with torch.no_grad():
             x = model.encode(x)
-            x = x.mean(dim = -2)
         X.append(x)
         y.append(y_i)
     X = torch.cat(X, dim = 0)
@@ -208,6 +207,7 @@ def run_tests(test_list, model, data_val, device):
 
 #TODO : break into functions
 #TODO : saving, loading pts
+#TODO : add imagenet2017 dataset
 
 if __name__ == "__main__":
     config = yaml.safe_load(open("../config/training.yml", "r"))
@@ -267,6 +267,7 @@ if __name__ == "__main__":
             loss = 0
             for pred, x_target in zip(preds, x_targets):
                 loss += torch.nn.functional.mse_loss(pred, x_target)
+            loss /= len(preds)
 
             loss.backward()
 
