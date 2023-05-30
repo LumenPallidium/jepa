@@ -6,7 +6,7 @@ import numpy as np
 import einops
 import matplotlib.pyplot as plt
 from tqdm import tqdm
-from jepa import IJepa
+from jepa import IJepa, EnergyIJepa
 from utils import WarmUpScheduler, losses_to_running_loss
 # need to do this for downloading on windows
 import ssl
@@ -231,7 +231,7 @@ if __name__ == "__main__":
 
     steps_per_epoch = len(data) // config["batch_size"]
 
-    model = IJepa(config["h"], 
+    model = EnergyIJepa(config["h"], 
                   config["w"], 
                   patch_size = config["patch_size"], 
                   n_targets = config["n_targets"]).to(device)

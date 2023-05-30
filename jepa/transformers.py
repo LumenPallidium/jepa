@@ -150,7 +150,6 @@ class Transformer(torch.nn.Module):
     def filtered_forward(self, x, indices):
         """Given a tensor of the form [context, masked target] and indices describing where on the image
         they come from, add positional embedding and pass through the transformer."""
-        # TODO: look into vmap instead of repeat here
         pos_embedding = self.pos_embedding[:, indices, :]
 
         x = x + pos_embedding

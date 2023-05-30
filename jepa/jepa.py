@@ -61,8 +61,53 @@ class JepaSkeleton(torch.nn.Module):
         x = self.target_encoder(x)
         # not sure if i should run this through the predictor - paper suggests no and that makes sense
         return x
-
+    
 class IJepa(JepaSkeleton):
+    def __init__(self,
+                 embedder,
+                 context_encoder,
+                 predictor):
+        super().__init__(embedder,
+                         context_encoder,
+                         predictor)
+        
+    def filter_tensor(self, x, indices):
+        """Wrapper for filtering a tensor, useful because shapes can vary in subclasses."""
+        return x[:, indices, :]
+    
+    def filter_tensor_range(self, x, range):
+        """Wrapper for filtering a tensor, useful because shapes can vary in subclasses."""
+        return x[:, :range, :]
+        
+    def embed_get_indices(self, x):
+        x_patched = self.embedder(x)
+        context, targets = self.embedder.get_indices()
+        return x_patched, context, targets
+
+    def encode_context_targets(self, x_patched, context, targets):
+        target_encoded = self.target_encoder(x_patched)
+        x_targets = [self.filter_tensor(target_encoded, target) for target in targets]
+
+        # .filtered_forward method filters the posemb to the context
+        context_encoded = self.context_encoder.filtered_forward(x_patched[context, :], 
+                                                                context)
+        return context_encoded, x_targets
+    
+    def predict(self, context_encoded, context, targets):
+        # need these for filtering the posemb to the right spots
+        indice_pairs = [torch.cat((target, context), dim = 0) for target in targets]
+        # create masks of right shape
+        pred_targets = [self.mask_token.repeat(context_encoded.shape[0], target.shape[0], 1) for target in targets]
+        # since shape is (batch, tokens, dim), we join at dim=1
+        pred_pairs = [torch.cat((pred_target, context_encoded), dim = 1) for pred_target in pred_targets]
+
+        preds = [self.predictor.filtered_forward(pred_pair, indice_pair) for pred_pair, indice_pair in zip(pred_pairs, indice_pairs)]
+        # filter to just the predicted target
+        preds = [self.filter_tensor_range(pred, target.shape[0]) for pred, target in zip(preds, targets)]
+
+        return preds
+
+class ViTJepa(IJepa):
     """The original IJepa model from the paper. Uses a VIT-style transformer for the context encoder.
     Essentially initializes the skeleton with VITs and the methods needed."""
     def __init__(self,
@@ -111,35 +156,103 @@ class IJepa(JepaSkeleton):
                          context_encoder,
                          predictor)
         
-    def embed_get_indices(self, x):
-        x_patched = self.embedder(x)
-        context, targets = self.embedder.get_indices()
-        return x_patched, context, targets
+class EnergyIJepa(IJepa):
+    def __init__(self,
+                 h, w,
+                 in_channels = 3,
+                 patch_size = 16,
+                 embed_dim = 256,
+                 hopfield_hidden_dim = 2048,
+                 n_heads = 8,
+                 n_iters_default = 4,
+                 alpha = 0.1,
+                 beta = None,
+                 hopfield_type = "relu",
+                 n_targets = 4,
+                 context_scale_fraction_range = (0.85, 1),
+                 context_aspect_ratio_range = (1, 1),
+                 target_scale_fraction_range = (0.15, 0.25),
+                 target_aspect_ratio_range = (0.75, 1.5),):
+        
+        assert ET_AVAILABLE, "EnergyIJepa requires the energy transformer to be installed. See readme."
 
-    def encode_context_targets(self, x_patched, context, targets):
-        target_encoded = self.target_encoder(x_patched)
-        x_targets = [target_encoded[:, target, :] for target in targets]
+        if isinstance(patch_size, int):
+            patch_size = (patch_size, patch_size)
 
-        # .filtered_forward method filters the posemb to the context
-        context_encoded = self.context_encoder.filtered_forward(x_patched[context, :], 
-                                                                context)
-        return context_encoded, x_targets
+        masked_embedder = MaskedEmbedder(h, w,
+                                         in_channels = in_channels,
+                                         patch_size = patch_size,
+                                         embed_dim = embed_dim,
+                                         n_targets = n_targets,
+                                         context_scale_fraction_range = context_scale_fraction_range,
+                                         context_aspect_ratio_range = context_aspect_ratio_range,
+                                         target_scale_fraction_range = target_scale_fraction_range,
+                                         target_aspect_ratio_range = target_aspect_ratio_range,)
+        
+        context_encoder = EnergyTransformer(dim = embed_dim,
+                                            hidden_dim = hopfield_hidden_dim,
+                                            n_heads = n_heads,
+                                            n_iters_default = n_iters_default,
+                                            alpha = alpha,
+                                            beta = beta,
+                                            context = h * w // patch_size[0] // patch_size[1],
+                                            hopfield_type = hopfield_type,
+                                            batched_input = False)
+        
+        predictor = EnergyTransformer(dim = embed_dim,
+                                      hidden_dim = hopfield_hidden_dim,
+                                      n_heads = n_heads,
+                                      n_iters_default = n_iters_default,
+                                      alpha = alpha,
+                                      beta = beta,
+                                      context = h * w // patch_size[0] // patch_size[1],
+                                      hopfield_type = hopfield_type,
+                                      batched_input = False)
+        
+        super().__init__(masked_embedder,
+                         context_encoder,
+                         predictor)
+        
+        # overwrite mask token
+        self.mask_token = torch.nn.Parameter(torch.randn(1, self.embed_dim))
+        
+    def filter_tensor(self, x, indices):
+        """Wrapper for filtering a tensor, useful because shapes can vary in subclasses."""
+        return x[indices, :]
     
+    def filter_tensor_range(self, x, range):
+        """Wrapper for filtering a tensor, useful because shapes can vary in subclasses."""
+        return x[:range, :]
+
     def predict(self, context_encoded, context, targets):
         # need these for filtering the posemb to the right spots
         indice_pairs = [torch.cat((target, context), dim = 0) for target in targets]
         # create masks of right shape
-        pred_targets = [self.mask_token.repeat(context_encoded.shape[0], target.shape[0], 1) for target in targets]
+        pred_targets = [self.mask_token.repeat(target.shape[0], 1) for target in targets]
         # since shape is (batch, tokens, dim), we join at dim=1
-        pred_pairs = [torch.cat((pred_target, context_encoded), dim = 1) for pred_target in pred_targets]
+        pred_pairs = [torch.cat((pred_target, context_encoded), dim = 0) for pred_target in pred_targets]
 
         preds = [self.predictor.filtered_forward(pred_pair, indice_pair) for pred_pair, indice_pair in zip(pred_pairs, indice_pairs)]
         # filter to just the predicted target
-        preds = [pred[:, :target.shape[0], :] for pred, target in zip(preds, targets)]
+        preds = [self.filter_tensor_range(pred, target.shape[0]) for pred, target in zip(preds, targets)]
 
         return preds
         
+    def forward(self, x):
+        """The forward operation. Unfortunately, we can't use vmap because of the way the energy transformer works."""
+        # for loop through batch
+        preds = []
+        x_targets = []
+        for x_i in x:
+            pred, x_target = self.forward_part(x_i)
+            # a bit hacky but they will be aligned
+            pred, x_target = torch.cat(pred), torch.cat(x_target)
+            preds.append(pred)
+            x_targets.append(x_target)
+        return preds, x_targets
+        
 
-#TODO : energy transformers!!
+        
+#TODO : continue cleaning up energy JEPA
 #TODO : look into adding VICReg losses on the encoders
     
