@@ -1,10 +1,10 @@
 # JEPA
-This repository contains my experiments with Joint Embedding Predictive Architectures (JEPAs). It contains my barebones implementation of [I-JEPA (Image-JEPA)](https://arxiv.org/abs/2301.08243), which is this general architecture applied to the image domain. [Yann LeCun thinks hierarchical JEPAs may be the basis for a future AGI.](https://openreview.net/pdf?id=BZ5a1r-kVsf)
+This repository contains my experiments with Joint Embedding Predictive Architectures (JEPAs). It contains my barebones implementation of [I-JEPA (Image-JEPA)](https://arxiv.org/abs/2301.08243), which is this general architecture applied to the image domain. I've included a variant matching the paper, which uses a ViT and one that uses an energy transformer. 
 
 ## Getting started
-The main libraries you will need are torch, torchvision, einops, and tqdm. I will add a requirements or environment file soon but am holding off as things are still WIP.
+The main libraries you will need are torch, torchvision, einops, and tqdm. Plotting (which is optional) uses matplotlib and UMAP. I will add a requirements or environment file soon but am holding off as things are still WIP. To run, use the jepa/train.py file.
 
-If you want to use the EnergyJepa, you'll have to [have that installed from my implementation](https://github.com/LumenPallidium/energy_transformer) (or you could just copy the main file from that repository to this repository's folders).
+If you want to use the EnergyJepa, you'll have to [my implementation of the energy transformer](https://github.com/LumenPallidium/energy_transformer) installed via pip (or you could just copy the main file from that repository to this repository's folders).
 
 
 ## What are JEPAs?
@@ -15,6 +15,7 @@ I-JEPA use a framework in which there are three networks: a context encoder, a t
 
 In this way, the model learns the structure of image, all while working in an embedding space. This is enabled by the fact that the predictor must learn to accurately predict. An advantage of this method compared with something like a (masked) autoencoder is that there is no limitation from a decoder. Not only does a decoder add more parameters to a model, it also adds a task which could in principle be harder than forming a strong representation of a given dataset's manifold (namely, the task of converting an object on that manifold to an object in a measurement space e.g. an image).
 
+[Yann LeCun thinks hierarchical JEPAs may be the basis for a future AGI.](https://openreview.net/pdf?id=BZ5a1r-kVsf)
 
 ## Implementation Notes
 
