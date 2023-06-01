@@ -6,7 +6,7 @@ import numpy as np
 import einops
 import matplotlib.pyplot as plt
 from tqdm import tqdm
-from jepa import IJepa, EnergyIJepa
+from jepa import ViTJepa, EnergyIJepa
 from utils import WarmUpScheduler, losses_to_running_loss
 # need to do this for downloading on windows
 import ssl
@@ -78,7 +78,7 @@ def generate_val_data(model, dataset, device, batch_size = 64):
 
     return X, y
 
-def coerce_shape(X, y = None, reduce = False, sample = 0.1):
+def coerce_shapes(X, y = None, reduce = False, sample = 0.1):
     if reduce:
         X = X.mean(dim = 1)
     else:
@@ -110,7 +110,7 @@ def knn_test(X : torch.Tensor,
     from sklearn.preprocessing import StandardScaler
 
     if coerce_shape and (len(X.shape) > 2):
-        X, y = coerce_shape(X, y = y, reduce = reduce, sample = sample)
+        X, y = coerce_shapes(X, y = y, reduce = reduce, sample = sample)
     
     X_np = X.cpu().numpy()
     X_np = StandardScaler().fit_transform(X_np)
@@ -122,17 +122,17 @@ def knn_test(X : torch.Tensor,
     knn.fit(X_np, y_np)
     print(f"Done.\n\tKNN score: {knn.score(X_np, y_np)}\nEmbedding in 2D and plotting...", end = "")
 
-def plot_embedding(X, y, k = 5, coerce_shape = True, reduce = False, sample = 0.002, lle_method = "modified"):
-    from sklearn.manifold import locally_linear_embedding
+def plot_embedding(X, y, k = 20, coerce_shape = True, reduce = False, sample = 0.002, lle_method = "modified"):
+    from umap import UMAP
     from sklearn.preprocessing import StandardScaler
     if coerce_shape and (len(X.shape) > 2):
-        X, y  = coerce_shape(X, y = y, reduce = reduce, sample = sample)
+        X, y  = coerce_shapes(X, y = y, reduce = reduce, sample = sample)
 
     X_np = X.cpu().numpy()
     X_np = StandardScaler().fit_transform(X_np)
     y_np = y.cpu().numpy()
 
-    X_embedded, err = locally_linear_embedding(X_np, n_neighbors = k, n_components = 2, method = lle_method)
+    X_embedded = UMAP(n_neighbors = k).fit_transform(X_np)
     # plot it, with colors corresponding to the true labels
     fig, ax = plt.subplots(figsize = (8, 6))
     ax.scatter(X_embedded[:, 0], X_embedded[:, 1], c = y_np, cmap = "tab10", s = 1, alpha = 0.1)
@@ -140,19 +140,32 @@ def plot_embedding(X, y, k = 5, coerce_shape = True, reduce = False, sample = 0.
     fig.savefig("../plots/embedding.png", dpi = 300)
 
 
-def corr_dimension(X, log_eps = np.linspace(-2, 0, 10), base = 10, plot = False, coerce_shape = True, reduce = False, sample = 0.002):
+def corr_dimension(X, 
+                   log_eps : np.array = None,
+                   n_points = 10,
+                   base = 10, 
+                   plot = False, 
+                   coerce_shape = True, 
+                   reduce = False, 
+                   sample = 0.002):
     """Correlation dimension, assumes X has already been stacked or reduced and is shape (n, dim)"""
     if coerce_shape and (len(X.shape) > 2):
-        X, _ = coerce_shape(X, reduce = reduce, sample = sample)
-
-    eps = list(base ** log_eps)
-    log_eps = list(log_eps)
+        X, _ = coerce_shapes(X, reduce = reduce, sample = sample)
 
     lens = X.shape[0]
     X = X # for compatibility with torch.cdist
     denominator = lens ** 2
     with torch.no_grad():
         dists = torch.nn.functional.pdist(X)
+
+        if log_eps is None:
+            min_log_eps = np.log(dists.min().item()) / np.log(base)
+            max_log_eps = np.log(dists.max().item()) / np.log(base)
+            log_eps = np.linspace(min_log_eps, max_log_eps, n_points)
+
+        eps = list(base ** log_eps)
+        log_eps = list(log_eps)
+
         corr_integrals = []
         max_i = 0
         for i, eps_i in enumerate(eps):
@@ -208,6 +221,8 @@ def run_tests(test_list, model, data_val, device):
 #TODO : break into functions
 #TODO : saving, loading pts
 #TODO : add imagenet2017 dataset
+#TODO : add function to print singular value count for network
+#TODO : update correlation dim to automatically determine epsilons
 
 if __name__ == "__main__":
     config = yaml.safe_load(open("../config/training.yml", "r"))
@@ -231,7 +246,7 @@ if __name__ == "__main__":
 
     steps_per_epoch = len(data) // config["batch_size"]
 
-    model = EnergyIJepa(config["h"], 
+    model = ViTJepa(config["h"], 
                   config["w"], 
                   patch_size = config["patch_size"], 
                   n_targets = config["n_targets"]).to(device)

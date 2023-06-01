@@ -63,6 +63,8 @@ class JepaSkeleton(torch.nn.Module):
         return x
     
 class IJepa(JepaSkeleton):
+    """An image JEPA. This is slightly more abstract than the paper implementation (can be used with models other than classic ViTs).
+    This model fills in some of the unimplemented methods in the skeleton. See ViTJepa below for an implementation more akin to the paper."""
     def __init__(self,
                  embedder,
                  context_encoder,
@@ -71,14 +73,6 @@ class IJepa(JepaSkeleton):
                          context_encoder,
                          predictor)
         
-    def filter_tensor(self, x, indices):
-        """Wrapper for filtering a tensor, useful because shapes can vary in subclasses."""
-        return x[:, indices, :]
-    
-    def filter_tensor_range(self, x, range):
-        """Wrapper for filtering a tensor, useful because shapes can vary in subclasses."""
-        return x[:, :range, :]
-        
     def embed_get_indices(self, x):
         x_patched = self.embedder(x)
         context, targets = self.embedder.get_indices()
@@ -86,7 +80,7 @@ class IJepa(JepaSkeleton):
 
     def encode_context_targets(self, x_patched, context, targets):
         target_encoded = self.target_encoder(x_patched)
-        x_targets = [self.filter_tensor(target_encoded, target) for target in targets]
+        x_targets = [target_encoded[:, target, :] for target in targets]
 
         # .filtered_forward method filters the posemb to the context
         context_encoded = self.context_encoder.filtered_forward(x_patched[context, :], 
@@ -103,7 +97,7 @@ class IJepa(JepaSkeleton):
 
         preds = [self.predictor.filtered_forward(pred_pair, indice_pair) for pred_pair, indice_pair in zip(pred_pairs, indice_pairs)]
         # filter to just the predicted target
-        preds = [self.filter_tensor_range(pred, target.shape[0]) for pred, target in zip(preds, targets)]
+        preds = [pred[:, :target.shape[0], :] for pred, target in zip(preds, targets)]
 
         return preds
 
@@ -164,7 +158,7 @@ class EnergyIJepa(IJepa):
                  embed_dim = 256,
                  hopfield_hidden_dim = 2048,
                  n_heads = 8,
-                 n_iters_default = 4,
+                 n_iters_default = 6,
                  alpha = 0.1,
                  beta = None,
                  hopfield_type = "relu",
@@ -196,8 +190,7 @@ class EnergyIJepa(IJepa):
                                             alpha = alpha,
                                             beta = beta,
                                             context = h * w // patch_size[0] // patch_size[1],
-                                            hopfield_type = hopfield_type,
-                                            batched_input = False)
+                                            hopfield_type = hopfield_type)
         
         predictor = EnergyTransformer(dim = embed_dim,
                                       hidden_dim = hopfield_hidden_dim,
@@ -206,53 +199,11 @@ class EnergyIJepa(IJepa):
                                       alpha = alpha,
                                       beta = beta,
                                       context = h * w // patch_size[0] // patch_size[1],
-                                      hopfield_type = hopfield_type,
-                                      batched_input = False)
+                                      hopfield_type = hopfield_type)
         
         super().__init__(masked_embedder,
                          context_encoder,
                          predictor)
-        
-        # overwrite mask token
-        self.mask_token = torch.nn.Parameter(torch.randn(1, self.embed_dim))
-        
-    def filter_tensor(self, x, indices):
-        """Wrapper for filtering a tensor, useful because shapes can vary in subclasses."""
-        return x[indices, :]
-    
-    def filter_tensor_range(self, x, range):
-        """Wrapper for filtering a tensor, useful because shapes can vary in subclasses."""
-        return x[:range, :]
 
-    def predict(self, context_encoded, context, targets):
-        # need these for filtering the posemb to the right spots
-        indice_pairs = [torch.cat((target, context), dim = 0) for target in targets]
-        # create masks of right shape
-        pred_targets = [self.mask_token.repeat(target.shape[0], 1) for target in targets]
-        # since shape is (batch, tokens, dim), we join at dim=1
-        pred_pairs = [torch.cat((pred_target, context_encoded), dim = 0) for pred_target in pred_targets]
-
-        preds = [self.predictor.filtered_forward(pred_pair, indice_pair) for pred_pair, indice_pair in zip(pred_pairs, indice_pairs)]
-        # filter to just the predicted target
-        preds = [self.filter_tensor_range(pred, target.shape[0]) for pred, target in zip(preds, targets)]
-
-        return preds
-        
-    def forward(self, x):
-        """The forward operation. Unfortunately, we can't use vmap because of the way the energy transformer works."""
-        # for loop through batch
-        preds = []
-        x_targets = []
-        for x_i in x:
-            pred, x_target = self.forward_part(x_i)
-            # a bit hacky but they will be aligned
-            pred, x_target = torch.cat(pred), torch.cat(x_target)
-            preds.append(pred)
-            x_targets.append(x_target)
-        return preds, x_targets
-        
-
-        
-#TODO : continue cleaning up energy JEPA
 #TODO : look into adding VICReg losses on the encoders
     

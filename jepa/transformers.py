@@ -148,7 +148,7 @@ class Transformer(torch.nn.Module):
         return x
     
     def filtered_forward(self, x, indices):
-        """Given a tensor of the form [context, masked target] and indices describing where on the image
+        """Given a tensor of the form [masked target, context] and indices describing where on the image
         they come from, add positional embedding and pass through the transformer."""
         pos_embedding = self.pos_embedding[:, indices, :]
 
