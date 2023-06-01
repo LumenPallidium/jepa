@@ -244,7 +244,7 @@ if __name__ == "__main__":
                                             download = True,
                                             transform = transform)
 
-    steps_per_epoch = len(data) // config["batch_size"]
+    steps_per_epoch = len(data) // (config["batch_size"] * config["accumulation_steps"])
 
     model = ViTJepa(config["h"], 
                   config["w"], 
@@ -269,26 +269,33 @@ if __name__ == "__main__":
             run_tests(config["tests"], model, data_val, device)
             
 
-        dataloader = torch.utils.data.DataLoader(data, 
+        dataloader = iter(torch.utils.data.DataLoader(data, 
                                                  batch_size = config["batch_size"], 
                                                  shuffle = True,
-                                                 collate_fn = collate)
+                                                 collate_fn = collate))
         epoch_losses = []
-        for i, x in tqdm(enumerate(dataloader)):
-            x = x.to(device)
+
+        for i in tqdm(range(steps_per_epoch)):
             optimizer.zero_grad()
-            preds, x_targets = model(x)
 
-            loss = 0
-            for pred, x_target in zip(preds, x_targets):
-                loss += torch.nn.functional.mse_loss(pred, x_target)
-            loss /= len(preds)
+            for j in range(config["accumulation_steps"]):
+                x = next(dataloader)
+                x = x.to(device)
+                
+                preds, x_targets = model(x)
 
-            loss.backward()
+                loss = 0
+                for pred, x_target in zip(preds, x_targets):
+                    loss += torch.nn.functional.mse_loss(pred, x_target)
+                # scale by number of targets and accumulation steps
+                loss /= len(preds) * config["accumulation_steps"]
+
+                loss.backward()
+                epoch_losses.append(loss.item())
 
             optimizer.step()
             scheduler.step()
-            epoch_losses.append(loss.item())
+                
         print(f"\tDone. Mean Loss: {np.mean(epoch_losses)}")
         losses.extend(epoch_losses)
 
