@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 from jepa import ViTJepa, EnergyIJepa
 from utils import WarmUpScheduler, losses_to_running_loss
+from datasets import get_imagenet, ImageNet2017
 # need to do this for downloading on windows
 import ssl
 ssl._create_default_https_context = ssl._create_unverified_context
@@ -122,11 +123,14 @@ def knn_test(X : torch.Tensor,
     knn.fit(X_np, y_np)
     print(f"Done.\n\tKNN score: {knn.score(X_np, y_np)}\nEmbedding in 2D and plotting...", end = "")
 
-def plot_embedding(X, y, k = 20, coerce_shape = True, reduce = False, sample = 0.002, lle_method = "modified"):
+def plot_embedding(X, y, k = 20, coerce_shape = True, reduce = True, sample = 0.002, epoch = None):
     from umap import UMAP
     from sklearn.preprocessing import StandardScaler
     if coerce_shape and (len(X.shape) > 2):
         X, y  = coerce_shapes(X, y = y, reduce = reduce, sample = sample)
+
+    if epoch is None:
+        epoch = ""
 
     X_np = X.cpu().numpy()
     X_np = StandardScaler().fit_transform(X_np)
@@ -137,7 +141,7 @@ def plot_embedding(X, y, k = 20, coerce_shape = True, reduce = False, sample = 0
     fig, ax = plt.subplots(figsize = (8, 6))
     ax.scatter(X_embedded[:, 0], X_embedded[:, 1], c = y_np, cmap = "tab10", s = 1, alpha = 0.1)
     os.makedirs("../plots/", exist_ok = True)
-    fig.savefig("../plots/embedding.png", dpi = 300)
+    fig.savefig(f"../plots/embedding_{epoch}.png", dpi = 300)
 
 
 def corr_dimension(X, 
@@ -192,7 +196,7 @@ def corr_dimension(X,
     print(f"\tCorrelation Dimension: {np.round(log_slope, 4)}")
 
 
-def run_tests(test_list, model, data_val, device):
+def run_tests(test_list, model, data_val, device, epoch):
     """Slightly inefficent and a bit verbose, but makes a nice wrapper so you can 
     specify tests in a list"""
     data_generated = False
@@ -212,7 +216,7 @@ def run_tests(test_list, model, data_val, device):
             if not data_generated:
                 X, y = generate_val_data(model, data_val, device)
                 data_generated = True
-            plot_embedding(X, y)
+            plot_embedding(X, y, epoch = epoch)
         elif test == "linear_probe":
             linear_probe_test(model, data_val, device)
         else:
@@ -235,14 +239,12 @@ if __name__ == "__main__":
                                                 torchvision.transforms.RandomHorizontalFlip(0.5),
                                                 torchvision.transforms.ToTensor()])
 
-    data = torchvision.datasets.Food101(root = config["data_path"], 
-                                        split = "train", 
-                                        download = True,
-                                        transform = transform)
-    data_val = torchvision.datasets.Food101(root = config["data_path"],
-                                            split = "test",
-                                            download = True,
-                                            transform = transform)
+    data = get_imagenet(config["data_path"],
+                        split = "train",
+                        transform = transform,)
+    data_val = get_imagenet(config["data_path"],
+                            split = "val",
+                            transform = transform,)
 
     steps_per_epoch = len(data) // (config["batch_size"] * config["accumulation_steps"])
 
@@ -266,7 +268,7 @@ if __name__ == "__main__":
     for epoch in range(config["n_epochs"]):
         print(f"Epoch {epoch + 1}")
         if (config["val_every"] != 0) and (epoch % config["val_every"] == 0):
-            run_tests(config["tests"], model, data_val, device)
+            run_tests(config["tests"], model, data_val, device, epoch)
             
 
         dataloader = iter(torch.utils.data.DataLoader(data, 

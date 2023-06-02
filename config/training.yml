@@ -5,13 +5,13 @@ n_targets : 4 # number of target patches to use
 n_epochs : 50
 warmup_epoch_fraction : 8 # fraction of epochs to use for warmup, 1/8 by default
 
-val_every : 4 # run a linear probing validation task every n epochs, 0 means no validation
-tests : ["corr_dim"]
+val_every : 0 # run a linear probing validation task every n epochs, 0 means no validation
+tests : ["corr_dim", "plot"]
 
 
 batch_size : 64
 accumulation_steps : 8
-data_path : "D:/Projects/image_datasets/"
+data_path : "Z:/"
 
 lr : 0.001
 weight_decay : 0.0001
