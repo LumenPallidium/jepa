@@ -196,7 +196,7 @@ def corr_dimension(X,
     print(f"\tCorrelation Dimension: {np.round(log_slope, 4)}")
 
 
-def run_tests(test_list, model, data_val, device, epoch):
+def run_tests(test_list, model, data_val, device, epoch, sample = 4096):
     """Slightly inefficent and a bit verbose, but makes a nice wrapper so you can 
     specify tests in a list"""
     data_generated = False
@@ -205,18 +205,18 @@ def run_tests(test_list, model, data_val, device, epoch):
             if not data_generated:
                 X, y = generate_val_data(model, data_val, device)
                 data_generated = True
-            knn_test(X, y)
+            knn_test(X, y, sample = sample)
         elif test == "corr_dim":
             if not data_generated:
                 X, y = generate_val_data(model, data_val, device)
                 data_generated = True
-            corr_dimension(X)
+            corr_dimension(X, sample = sample)
         elif test == "plot":
             # not technically a test :)
             if not data_generated:
                 X, y = generate_val_data(model, data_val, device)
                 data_generated = True
-            plot_embedding(X, y, epoch = epoch)
+            plot_embedding(X, y, epoch = epoch, sample = sample)
         elif test == "linear_probe":
             linear_probe_test(model, data_val, device)
         else:
@@ -224,9 +224,7 @@ def run_tests(test_list, model, data_val, device, epoch):
 
 #TODO : break into functions
 #TODO : saving, loading pts
-#TODO : add imagenet2017 dataset
 #TODO : add function to print singular value count for network
-#TODO : update correlation dim to automatically determine epsilons
 
 if __name__ == "__main__":
     config = yaml.safe_load(open("../config/training.yml", "r"))
@@ -246,12 +244,16 @@ if __name__ == "__main__":
                             split = "val",
                             transform = transform,)
 
-    steps_per_epoch = len(data) // (config["batch_size"] * config["accumulation_steps"])
+    mini_epochs_per_epoch = len(data) // config["mini_epoch_len"]
+    steps_per_mini_epoch = config["mini_epoch_len"] // (config["batch_size"] * config["accumulation_steps"])
+    steps_per_epoch = mini_epochs_per_epoch * steps_per_mini_epoch
 
     model = ViTJepa(config["h"], 
                   config["w"], 
                   patch_size = config["patch_size"], 
                   n_targets = config["n_targets"]).to(device)
+    os.makedirs("../models", exist_ok = True)
+
     optimizer = torch.optim.AdamW(model.parameters(), 
                                   lr = config["lr"], 
                                   weight_decay = config["weight_decay"],
@@ -277,33 +279,40 @@ if __name__ == "__main__":
                                                  collate_fn = collate))
         epoch_losses = []
 
-        for i in tqdm(range(steps_per_epoch)):
-            optimizer.zero_grad()
+        for mini_epoch in range(mini_epochs_per_epoch):
 
-            for j in range(config["accumulation_steps"]):
-                x = next(dataloader)
-                x = x.to(device)
-                
-                preds, x_targets = model(x)
+            print(f"\tMini Epoch {mini_epoch + 1}")
+            torch.save(model.state_dict(), f"../models/ijepa_{epoch}_{mini_epoch}.pt")
 
-                loss = 0
-                for pred, x_target in zip(preds, x_targets):
-                    loss += torch.nn.functional.mse_loss(pred, x_target)
-                # scale by number of targets and accumulation steps
-                loss /= len(preds) * config["accumulation_steps"]
+            mini_epoch_losses = []
 
-                loss.backward()
-                epoch_losses.append(loss.item())
+            for i in tqdm(range(steps_per_mini_epoch)):
+                optimizer.zero_grad()
 
-            optimizer.step()
-            scheduler.step()
-                
+                for j in range(config["accumulation_steps"]):
+                    x = next(dataloader)
+                    x = x.to(device)
+                    
+                    preds, x_targets = model(x)
+
+                    loss = 0
+                    for pred, x_target in zip(preds, x_targets):
+                        loss += torch.nn.functional.mse_loss(pred, x_target)
+                    # scale by number of targets and accumulation steps
+                    loss /= len(preds) * config["accumulation_steps"]
+
+                    loss.backward()
+                    mini_epoch_losses.append(loss.item())
+
+                optimizer.step()
+                scheduler.step()
+
+            print(f"\t\tDone. Mean Loss: {np.mean(mini_epoch_losses)}")
+            epoch_losses.extend(mini_epoch_losses)
+                    
         print(f"\tDone. Mean Loss: {np.mean(epoch_losses)}")
         losses.extend(epoch_losses)
 
     running_losses = losses_to_running_loss(losses)
     log_losses = np.log(running_losses)
     plt.plot(running_losses)
-
-    os.makedirs("../models", exist_ok = True)
-    torch.save(model.state_dict(), "../models/ijepa.pt")

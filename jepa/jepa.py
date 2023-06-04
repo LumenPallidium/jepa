@@ -103,7 +103,8 @@ class IJepa(JepaSkeleton):
 
 class ViTJepa(IJepa):
     """The original IJepa model from the paper. Uses a VIT-style transformer for the context encoder.
-    Essentially initializes the skeleton with VITs and the methods needed."""
+    Essentially initializes the skeleton with VITs and the methods needed. Default is a small model
+    for testing."""
     def __init__(self,
                  h, w,
                  in_channels = 3,
