@@ -11,6 +11,7 @@ except ImportError:
     ET_AVAILABLE = False
     print("EnergyTransformer not available. See the readme if you want to install it.")
 
+
 class JepaSkeleton(torch.nn.Module):
     #TODO : use ABCs?
     def __init__(self,
@@ -46,21 +47,34 @@ class JepaSkeleton(torch.nn.Module):
         context_encoded, x_targets = self.encode_context_targets(x_patched, context, targets)
 
         preds = self.predict(context_encoded, context, targets)
-
-        self.target_encoder.ema_update(self.context_encoder)
         
-        return preds, x_targets
+        return preds, x_targets, context_encoded
     
     def forward(self, x):
         """The forward operation. Uses vmap so that we can have different contexts,targets for each image in the batch."""
-        preds, x_targets = torch.vmap(self.forward_part, randomness = "different")(x)
-        return preds, x_targets
+        preds, x_targets, context_encoded = torch.vmap(self.forward_part, randomness = "different")(x)
+        return preds, x_targets, context_encoded
     
     def encode(self, x):
         x = self.embedder(x)
         x = self.target_encoder(x)
         # not sure if i should run this through the predictor - paper suggests no and that makes sense
         return x
+    
+    def enable_util_norm(self, util_norm_name = "weight"):
+        self.context_encoder.add_util_norm(norm_name = util_norm_name)
+        self.target_encoder.add_util_norm(norm_name = util_norm_name)
+    
+    def save(self, path):
+        had_util_norm = False
+        if self.context_encoder.has_util_norm:
+            self.context_encoder.remove_util_norm()
+            self.target_encoder.remove_util_norm()
+            had_util_norm = True
+        torch.save(self.state_dict(), path)
+
+        if had_util_norm:
+            self.enable_util_norm()
     
 class IJepa(JepaSkeleton):
     """An image JEPA. This is slightly more abstract than the paper implementation (can be used with models other than classic ViTs).
@@ -79,8 +93,9 @@ class IJepa(JepaSkeleton):
         return x_patched, context, targets
 
     def encode_context_targets(self, x_patched, context, targets):
-        target_encoded = self.target_encoder(x_patched)
-        x_targets = [target_encoded[:, target, :] for target in targets]
+        with torch.no_grad():
+            target_encoded = self.target_encoder(x_patched)
+            x_targets = [target_encoded[:, target, :] for target in targets]
 
         # .filtered_forward method filters the posemb to the context
         context_encoded = self.context_encoder.filtered_forward(x_patched[context, :], 

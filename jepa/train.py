@@ -7,7 +7,7 @@ import einops
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from jepa import ViTJepa, EnergyIJepa
-from utils import WarmUpScheduler, losses_to_running_loss
+from utils import WarmUpScheduler, losses_to_running_loss, get_latest_file
 from datasets import get_imagenet, ImageNet2017
 # need to do this for downloading on windows
 import ssl
@@ -79,13 +79,17 @@ def generate_val_data(model, dataset, device, batch_size = 64):
 
     return X, y
 
-def coerce_shapes(X, y = None, reduce = False, sample = 0.1):
+def coerce_shapes(X, y = None, reduce = False, sample = 0.1, n_labels = None):
     if reduce:
         X = X.mean(dim = 1)
     else:
         if y is not None:
             lengths = X.shape[1]
             y = y.unsqueeze(1).repeat(1, lengths).flatten()
+
+            if n_labels is not None:
+                X = X[y < n_labels]
+                y = y[y < n_labels]
 
         X = einops.rearrange(X, "b l d -> (b l) d")
 
@@ -139,22 +143,24 @@ def plot_embedding(X, y, k = 20, coerce_shape = True, reduce = True, sample = 0.
     X_embedded = UMAP(n_neighbors = k).fit_transform(X_np)
     # plot it, with colors corresponding to the true labels
     fig, ax = plt.subplots(figsize = (8, 6))
-    ax.scatter(X_embedded[:, 0], X_embedded[:, 1], c = y_np, cmap = "tab10", s = 1, alpha = 0.1)
+    ax.scatter(X_embedded[:, 0], X_embedded[:, 1], c = y_np, cmap = "turbo", s = 1, alpha = 0.1)
     os.makedirs("../plots/", exist_ok = True)
     fig.savefig(f"../plots/embedding_{epoch}.png", dpi = 300)
+    plt.close(fig)
 
 
 def corr_dimension(X, 
                    log_eps : np.array = None,
                    n_points = 10,
                    base = 10, 
-                   plot = False, 
+                   plot = True, 
                    coerce_shape = True, 
                    reduce = False, 
-                   sample = 0.002):
+                   sample = 0.002,
+                   n_labels = 20):
     """Correlation dimension, assumes X has already been stacked or reduced and is shape (n, dim)"""
     if coerce_shape and (len(X.shape) > 2):
-        X, _ = coerce_shapes(X, reduce = reduce, sample = sample)
+        X, _ = coerce_shapes(X, reduce = reduce, sample = sample, n_labels = n_labels)
 
     lens = X.shape[0]
     X = X # for compatibility with torch.cdist
@@ -165,7 +171,9 @@ def corr_dimension(X,
         if log_eps is None:
             min_log_eps = np.log(dists.min().item()) / np.log(base)
             max_log_eps = np.log(dists.max().item()) / np.log(base)
-            log_eps = np.linspace(min_log_eps, max_log_eps, n_points)
+            # use midpoint cause max skews corr dim calculation
+            midpoint_log_eps = (min_log_eps + max_log_eps) / 2
+            log_eps = np.linspace(min_log_eps, midpoint_log_eps, n_points)
 
         eps = list(base ** log_eps)
         log_eps = list(log_eps)
@@ -189,6 +197,7 @@ def corr_dimension(X,
         ax.set_xlabel("log(eps)")
         ax.set_ylabel("log(C(eps))")
         fig.savefig("../plots/corr_integrals.png", dpi = 300)
+        plt.close(fig)
     if len(log_eps) <= 1:
         log_slope = np.nan
     else:
@@ -223,8 +232,10 @@ def run_tests(test_list, model, data_val, device, epoch, sample = 4096):
             raise ValueError(f"Unknown test {test}")
 
 #TODO : break into functions
-#TODO : saving, loading pts
+#TODO : saving and loading scheduler + optimizer
 #TODO : add function to print singular value count for network
+#TODO : vmap may not be working how i want it to in the network forward
+#TODO : should output of encoders be normalized? paper says nothing = no?
 
 if __name__ == "__main__":
     config = yaml.safe_load(open("../config/training.yml", "r"))
@@ -254,6 +265,17 @@ if __name__ == "__main__":
                   n_targets = config["n_targets"]).to(device)
     os.makedirs("../models", exist_ok = True)
 
+    if os.path.exists("../models"):
+        model_path = get_latest_file("../models", "ijepa")
+        if model_path is not None:
+            print(f"Loading model from {model_path}")
+            model.load_state_dict(torch.load(model_path))
+            start_epoch = int(model_path.split("_")[-2])
+    else:
+        start_epoch = 0
+
+    model.enable_util_norm()
+
     optimizer = torch.optim.AdamW(model.parameters(), 
                                   lr = config["lr"], 
                                   weight_decay = config["weight_decay"],
@@ -267,11 +289,10 @@ if __name__ == "__main__":
 
     losses = []
 
-    for epoch in range(config["n_epochs"]):
+    for epoch_i in range(config["n_epochs"]):
+        epoch = epoch_i + start_epoch
+
         print(f"Epoch {epoch + 1}")
-        if (config["val_every"] != 0) and (epoch % config["val_every"] == 0):
-            run_tests(config["tests"], model, data_val, device, epoch)
-            
 
         dataloader = iter(torch.utils.data.DataLoader(data, 
                                                  batch_size = config["batch_size"], 
@@ -282,7 +303,13 @@ if __name__ == "__main__":
         for mini_epoch in range(mini_epochs_per_epoch):
 
             print(f"\tMini Epoch {mini_epoch + 1}")
-            torch.save(model.state_dict(), f"../models/ijepa_{epoch}_{mini_epoch}.pt")
+
+            model_save_name = config["model_save_name"]
+            save_path = f"../models/{model_save_name}_{epoch}_{mini_epoch}.pt"
+            model.save(save_path)
+
+            if (config["val_every"] != 0) and (mini_epoch % config["val_every"] == 0):
+                run_tests(config["tests"], model, data_val, device, epoch)
 
             mini_epoch_losses = []
 
@@ -293,13 +320,24 @@ if __name__ == "__main__":
                     x = next(dataloader)
                     x = x.to(device)
                     
-                    preds, x_targets = model(x)
+                    preds, x_targets, context_encoded = model(x)
 
                     loss = 0
                     for pred, x_target in zip(preds, x_targets):
-                        loss += torch.nn.functional.mse_loss(pred, x_target)
+                        # using huber loss cause MSE is too sensitive to outliers
+                        loss += torch.nn.functional.huber_loss(pred, x_target)
                     # scale by number of targets and accumulation steps
                     loss /= len(preds) * config["accumulation_steps"]
+
+                    # apply an additional VicReg inspired loss to decorrelate (mean) batch embeddings
+                    if config["decorrelation_weight"]:
+                        # mean over (unequal) lengths/patches 
+                        mean_context = context_encoded.mean(dim = (1, 2))
+                        cov_loss = torch.cov(mean_context).triu(diagonal = 1).abs().mean()
+                        # scale by weight and number of accumulation steps
+                        cov_loss *= config["decorrelation_weight"] / config["accumulation_steps"]
+
+                        loss += cov_loss
 
                     loss.backward()
                     mini_epoch_losses.append(loss.item())
@@ -307,11 +345,17 @@ if __name__ == "__main__":
                 optimizer.step()
                 scheduler.step()
 
+                # update after step
+                model.target_encoder.ema_update(model.context_encoder)
+
             print(f"\t\tDone. Mean Loss: {np.mean(mini_epoch_losses)}")
             epoch_losses.extend(mini_epoch_losses)
                     
         print(f"\tDone. Mean Loss: {np.mean(epoch_losses)}")
         losses.extend(epoch_losses)
+
+        save_path = f"../models/{model_save_name}_{epoch + 1}_start.pt"
+        model.save(save_path)
 
     running_losses = losses_to_running_loss(losses)
     log_losses = np.log(running_losses)

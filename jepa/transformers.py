@@ -2,6 +2,25 @@ import torch
 from einops import rearrange
 from einops.layers.torch import Rearrange
 
+def add_util_norm(module, norm = "weight", **norm_kwargs):
+    """Adds a norm from torch.nn.utils to a module"""
+    if norm == "weight":
+        norm_f = torch.nn.utils.weight_norm
+    elif norm == "spectral":
+        norm_f = torch.nn.utils.spectral_norm
+    else:
+        norm_f = lambda x: x
+    return norm_f(module, **norm_kwargs)
+
+def remove_util_norm(module, norm = "weight"):
+    if norm == "weight":
+        norm_f = torch.nn.utils.remove_weight_norm
+    elif norm == "spectral":
+        norm_f = torch.nn.utils.remove_spectral_norm
+    else:
+        norm_f = lambda x: x
+    return norm_f(module)
+
 class Attention2d(torch.nn.Module):
     """Based on ViT implementation from Phil Wang:
     https://github.com/lucidrains/musiclm-pytorch/blob/main/musiclm_pytorch/musiclm_pytorch.py
@@ -126,6 +145,8 @@ class Transformer(torch.nn.Module):
         self.depth = depth
         self.ema_decay = ema_decay
 
+        self.has_util_norm = False
+
         if positional_embedding:
             assert context is not None, "Context must be provided if positional embedding is used"
             self.pos_embedding = torch.nn.Parameter(torch.randn(1, context, dim))
@@ -161,4 +182,19 @@ class Transformer(torch.nn.Module):
     def ema_update(self, new_model):
         for ema_param, new_param in zip(self.parameters(), new_model.parameters()):
             ema_param.data.copy_(ema_param.data * self.ema_decay + (1 - self.ema_decay) * new_param.data)
+
+    def add_util_norm(self, norm_name = "weight"):
+        for module in self.modules():
+            if isinstance(module, torch.nn.Linear):
+                add_util_norm(module, norm_name)
+        self.has_util_norm = True
+    
+    def remove_util_norm(self):
+        for module in self.modules():
+            if isinstance(module, torch.nn.Linear):
+                remove_util_norm(module)
+        self.has_util_norm = False
+
+
+
         

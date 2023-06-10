@@ -2,17 +2,18 @@ h : 224
 w : 224
 patch_size : 16
 n_targets : 4 # number of target patches to use
-n_epochs : 1
+n_epochs : 2
 mini_epoch_len : 100000 # number of *steps* per mini-epoch
 batch_size : 64
 accumulation_steps : 8
+decorrelation_weight : 0.001
+
 data_path : "D:/Projects/image_datasets"
+model_save_name : "ijepa"
 warmup_epoch_fraction : 8 # fraction of epochs to use for warmup, 1/8 by default
 
-val_every : 0 # run a linear probing validation task every n epochs, 0 means no validation
-tests : ["corr_dim", "plot"]
-
-
+val_every : 5 # run validation tasks every n mini-epochs, 0 means no validation
+tests : ["corr_dim", "plot"] # the tests to run for validation
 
 
 lr : 0.001

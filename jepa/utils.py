@@ -1,3 +1,4 @@
+import os
 
 class WarmUpScheduler(object):
     """Copilot wrote this, made some small tweaks though."""
@@ -30,3 +31,14 @@ def losses_to_running_loss(losses, alpha = 0.95):
         running_loss = (1 - alpha) * loss + alpha * running_loss
         running_losses.append(running_loss)
     return running_losses
+
+def get_latest_file(path, name):
+    """Util to get the most recent model checkpoints easily."""
+    try:
+        files = [os.path.join(path, f) for f in os.listdir(path) if name in f]
+        file = max(files, key = os.path.getmtime)
+        # replacing backslashes with forward slashes for windows
+        file = file.replace("\\","/")
+    except (ValueError, FileNotFoundError):
+        file = None
+    return file
