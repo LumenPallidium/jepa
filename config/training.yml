@@ -6,7 +6,7 @@ n_epochs : 2
 mini_epoch_len : 100000 # number of *steps* per mini-epoch
 batch_size : 64
 accumulation_steps : 8
-decorrelation_weight : 0.001
+decorrelation_weight : 0.1
 
 data_path : "D:/Projects/image_datasets"
 model_save_name : "ijepa"
@@ -16,7 +16,7 @@ val_every : 5 # run validation tasks every n mini-epochs, 0 means no validation
 tests : ["corr_dim", "plot"] # the tests to run for validation
 
 
-lr : 0.001
+lr : 0.0002
 weight_decay : 0.0001
 beta1 : 0.995
 beta2 : 0.999

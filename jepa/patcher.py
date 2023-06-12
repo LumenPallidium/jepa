@@ -173,6 +173,9 @@ class MaskedEmbedder(torch.nn.Module):
                  target_aspect_ratio_range = (0.75, 1.5),):
         super().__init__()
 
+        self.h = h
+        self.w = w
+
         if isinstance(patch_size, int):
             patch_size = (patch_size, patch_size)
         self.patch_size = patch_size

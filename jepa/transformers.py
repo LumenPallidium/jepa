@@ -76,6 +76,35 @@ class Attention2d(torch.nn.Module):
 
         return self.dropout(output)
     
+    def attention_single_head(self, x, head = None, patch = None):
+        """Interpretation function to filter output to a single head, seperate from forward to avoid
+        if-else in main function"""
+
+        x = self.norm(x)
+
+        q, k, v = self.W_q(x), self.W_k(x), self.W_v(x)
+        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = self.n_heads), (q, k, v))
+
+        if (head is not None) and (head > -1):
+            q, k, v = q[:, head, :, :], k[:, head, :, :], v[:, head, :, :]
+
+        attention = torch.einsum("b ... i k, b ... j k -> b ... i j", q, k)
+
+        if (head is None) or (head < 0):
+            attention = attention.mean(dim = 1)
+
+        attention = attention / (self.dim_head ** 0.5)
+        attention = attention.softmax(dim = -1)
+
+        if patch is None:
+            # get combined vector of attentions
+            output = attention.triu(diagonal = 0).sum(dim = 1)
+            output = output / output.sum(dim = -1, keepdim = True)
+        else:
+            output = attention[:, :, patch]
+
+        return output
+    
 class FeedForward(torch.nn.Module):
     """A feed forward layer for transformers.
     
@@ -143,6 +172,8 @@ class Transformer(torch.nn.Module):
 
         self.dim = dim
         self.depth = depth
+        self.heads = heads
+
         self.ema_decay = ema_decay
 
         self.has_util_norm = False
@@ -179,6 +210,19 @@ class Transformer(torch.nn.Module):
             x = x + ff(x)
         return x
     
+    def get_nth_attention(self, x, n, head = None, patch = None):
+        """Modified forward for just getting the output of the nth attention layer, for use in the
+        attention visualization."""
+        x = x + self.pos_embedding
+        for i, (attention, ff) in enumerate(self.layers):
+            if i < n:
+                x = x + attention(x)
+            else:
+                x = attention.attention_single_head(x, head = head, patch = patch)
+                break
+            x = x + ff(x)
+        return x
+    
     def ema_update(self, new_model):
         for ema_param, new_param in zip(self.parameters(), new_model.parameters()):
             ema_param.data.copy_(ema_param.data * self.ema_decay + (1 - self.ema_decay) * new_param.data)
@@ -194,6 +238,7 @@ class Transformer(torch.nn.Module):
             if isinstance(module, torch.nn.Linear):
                 remove_util_norm(module)
         self.has_util_norm = False
+
 
 
 

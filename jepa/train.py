@@ -22,6 +22,20 @@ def collate(x):
     x = [x_i[0] for x_i in x]
     return torch.stack(x, dim = 0)
 
+def tensor_to_rgb_tensor(x, channel = "r"):
+    """Converts a single channel tensor to a 3 channel tensor (used in plotting attention)"""
+    rgb = "rgb"
+    assert channel in rgb, f"channel must be one of {rgb}"
+    index = rgb.index(channel)
+
+    if len(x.shape) == 3:
+        x = x.unsqueeze(1)
+    zeros = torch.zeros_like(x)
+    zeros = [zeros] * 3
+    zeros[index] = x
+    zeros = torch.cat(zeros, dim = 1)
+    return zeros
+
 
 def linear_probe_test(model, 
                     dataset,
@@ -231,6 +245,30 @@ def run_tests(test_list, model, data_val, device, epoch, sample = 4096):
         else:
             raise ValueError(f"Unknown test {test}")
 
+def get_model(config, device):
+    model = ViTJepa(config["h"], 
+                    config["w"], 
+                    patch_size = config["patch_size"], 
+                    n_targets = config["n_targets"]).to(device)
+    os.makedirs("../models", exist_ok = True)
+
+    if os.path.exists("../models"):
+        model_path = get_latest_file("../models", "ijepa")
+        if model_path is not None:
+            print(f"Loading model from {model_path}")
+            model.load_state_dict(torch.load(model_path))
+            start_epoch = int(model_path.split("_")[-2])
+    else:
+        start_epoch = 0
+
+    model.enable_util_norm()
+
+    return model, start_epoch
+
+
+# global for use anywhere
+config = yaml.safe_load(open("../config/training.yml", "r"))
+
 #TODO : break into functions
 #TODO : saving and loading scheduler + optimizer
 #TODO : add function to print singular value count for network
@@ -238,8 +276,7 @@ def run_tests(test_list, model, data_val, device, epoch, sample = 4096):
 #TODO : should output of encoders be normalized? paper says nothing = no?
 
 if __name__ == "__main__":
-    config = yaml.safe_load(open("../config/training.yml", "r"))
-
+    
     warmup_epochs = config["n_epochs"] / config["warmup_epoch_fraction"]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -259,22 +296,7 @@ if __name__ == "__main__":
     steps_per_mini_epoch = config["mini_epoch_len"] // (config["batch_size"] * config["accumulation_steps"])
     steps_per_epoch = mini_epochs_per_epoch * steps_per_mini_epoch
 
-    model = ViTJepa(config["h"], 
-                  config["w"], 
-                  patch_size = config["patch_size"], 
-                  n_targets = config["n_targets"]).to(device)
-    os.makedirs("../models", exist_ok = True)
-
-    if os.path.exists("../models"):
-        model_path = get_latest_file("../models", "ijepa")
-        if model_path is not None:
-            print(f"Loading model from {model_path}")
-            model.load_state_dict(torch.load(model_path))
-            start_epoch = int(model_path.split("_")[-2])
-    else:
-        start_epoch = 0
-
-    model.enable_util_norm()
+    model, start_epoch = get_model(config, device)
 
     optimizer = torch.optim.AdamW(model.parameters(), 
                                   lr = config["lr"], 
@@ -360,3 +382,5 @@ if __name__ == "__main__":
     running_losses = losses_to_running_loss(losses)
     log_losses = np.log(running_losses)
     plt.plot(running_losses)
+
+
