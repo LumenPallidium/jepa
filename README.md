@@ -17,6 +17,28 @@ In this way, the model learns the structure of image, all while working in an em
 
 [Yann LeCun thinks hierarchical JEPAs may be the basis for a future AGI.](https://openreview.net/pdf?id=BZ5a1r-kVsf)
 
+## Evaluating the Implementation
+
+I ran the model on Imagenet for 21 epochs (with 1.2M images per epoch). Note that the paper trains for 300 epochs, but I can't do that on my single GPU in any reasonable amount of time :).
+
+Due to self-superivsed objective, it's hard to evaluate how the JEPA is learning with e.g. validation or test set loss. I used several methods to evaluate the model. Like the paper, one such method was linear probes and KNN to test a frozen version of the model on Imagenet classification accuracy. Ideally, the model forms semantically-rich representation that will enable linear probes and KNN to perform well on classification.
+
+In addition to the metrics in the paper, I also looked into a few other metrics:
+
+* Attention map visualization
+* Correlation dimension
+* UMAP embeddings colored by true image class (qualitative evaluation)
+
+The attention map visualization is better depicted than explained:
+
+The attention_vis.py file can be used to run this dashboard, it's implemented in dash. The visualization suggests that the model is learning semantic features, notice for example the figure/ground seperation. Attention head 7 in layer 5 also has the very interesting property that it seems to attend to what the patch is NOT a part of e.g. given a patch, it tends to attend to the surrounding objects as opposed to the selected one.
+
+Correlation dimension is a measure frequently used in fractal analysis; given an object embedded in some N-d space, it aims to estimate the dimensionality of the object. Intuitively, it measures how the number of neighbors of a point grows as a function neighborhood radius. As an example, if you select points uniformly from 3D sphere embedded in a space of any dimension, the number of neighbors for any given point should grow as N^3.
+
+Here is the UMAP of the embeddedings after training, very eagle-like:
+![Embeds](images/embeds.png)
+
+
 ## Implementation Notes
 
 ### Cropping/Masking

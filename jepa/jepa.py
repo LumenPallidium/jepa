@@ -117,25 +117,13 @@ class IJepa(JepaSkeleton):
 
         return preds
     
-    def visualize_attention(self, x, layer = 0, head = 0, patch = 0):
+    def visualize_attention(self, x):
         x = self.embedder(x)
 
         #TODO : maybe need to make attention patch-level
-        attention = self.target_encoder.get_nth_attention(x, layer, head = head, patch = patch).unsqueeze(-1)
+        attentions = self.target_encoder.get_attentions(x)
 
-        patch_x, patch_y = self.embedder.patch_size
-        h, w = self.embedder.h, self.embedder.w
-
-        attention_image = einops.rearrange(attention, 
-                                           "b (h w) 1 -> b 1 h w",
-                                           h = h // patch_x,
-                                           w = w // patch_y)
-        
-        # using interpolate here for ease
-        attention_image = torch.nn.functional.interpolate(attention_image, 
-                                                          size = (h, w))
-
-        return attention_image
+        return attentions
 
 class ViTJepa(IJepa):
     """The original IJepa model from the paper. Uses a VIT-style transformer for the context encoder.

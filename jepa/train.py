@@ -22,20 +22,6 @@ def collate(x):
     x = [x_i[0] for x_i in x]
     return torch.stack(x, dim = 0)
 
-def tensor_to_rgb_tensor(x, channel = "r"):
-    """Converts a single channel tensor to a 3 channel tensor (used in plotting attention)"""
-    rgb = "rgb"
-    assert channel in rgb, f"channel must be one of {rgb}"
-    index = rgb.index(channel)
-
-    if len(x.shape) == 3:
-        x = x.unsqueeze(1)
-    zeros = torch.zeros_like(x)
-    zeros = [zeros] * 3
-    zeros[index] = x
-    zeros = torch.cat(zeros, dim = 1)
-    return zeros
-
 
 def linear_probe_test(model, 
                     dataset,

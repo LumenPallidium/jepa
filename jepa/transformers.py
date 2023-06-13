@@ -76,7 +76,7 @@ class Attention2d(torch.nn.Module):
 
         return self.dropout(output)
     
-    def attention_single_head(self, x, head = None, patch = None):
+    def attention_single_head(self, x):
         """Interpretation function to filter output to a single head, seperate from forward to avoid
         if-else in main function"""
 
@@ -85,25 +85,12 @@ class Attention2d(torch.nn.Module):
         q, k, v = self.W_q(x), self.W_k(x), self.W_v(x)
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = self.n_heads), (q, k, v))
 
-        if (head is not None) and (head > -1):
-            q, k, v = q[:, head, :, :], k[:, head, :, :], v[:, head, :, :]
-
-        attention = torch.einsum("b ... i k, b ... j k -> b ... i j", q, k)
-
-        if (head is None) or (head < 0):
-            attention = attention.mean(dim = 1)
+        attention = torch.einsum("b h i k, b h j k -> b h i j", q, k)
 
         attention = attention / (self.dim_head ** 0.5)
         attention = attention.softmax(dim = -1)
 
-        if patch is None:
-            # get combined vector of attentions
-            output = attention.triu(diagonal = 0).sum(dim = 1)
-            output = output / output.sum(dim = -1, keepdim = True)
-        else:
-            output = attention[:, :, patch]
-
-        return output
+        return attention
     
 class FeedForward(torch.nn.Module):
     """A feed forward layer for transformers.
@@ -210,18 +197,18 @@ class Transformer(torch.nn.Module):
             x = x + ff(x)
         return x
     
-    def get_nth_attention(self, x, n, head = None, patch = None):
-        """Modified forward for just getting the output of the nth attention layer, for use in the
+    def get_attentions(self, x):
+        """Modified forward for just getting the output of the nth attention layers, for use in the
         attention visualization."""
+        attentions = []
         x = x + self.pos_embedding
         for i, (attention, ff) in enumerate(self.layers):
-            if i < n:
-                x = x + attention(x)
-            else:
-                x = attention.attention_single_head(x, head = head, patch = patch)
-                break
+            attention_i = attention.attention_single_head(x)
+            attentions.append(attention_i)
+
+            x = x + attention(x)
             x = x + ff(x)
-        return x
+        return attentions
     
     def ema_update(self, new_model):
         for ema_param, new_param in zip(self.parameters(), new_model.parameters()):
