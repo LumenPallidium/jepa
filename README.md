@@ -1,4 +1,6 @@
 # JEPA
+(Update 6/13/2023) Meta just released and open-sourced [their implementation of I-JEPA](https://github.com/facebookresearch/ijepa). A bittersweet moment for me!
+
 This repository contains my experiments with Joint Embedding Predictive Architectures (JEPAs). It contains my barebones implementation of [I-JEPA (Image-JEPA)](https://arxiv.org/abs/2301.08243), which is this general architecture applied to the image domain. I've included a variant matching the paper, which uses a ViT and one that uses an energy transformer. 
 
 ## Getting started
@@ -31,9 +33,7 @@ In addition to the metrics in the paper, I also looked into a few other metrics:
 
 The attention map visualization is better depicted than explained:
 
-
-https://github.com/LumenPallidium/jepa/assets/42820488/5372d631-402d-44a7-ac13-96e8ec2f5967
-
+https://github.com/LumenPallidium/jepa/assets/42820488/0abbf1fc-9ca1-4d9d-a935-7e6481ec95f2
 
 The attention_vis.py file can be used to run this dashboard, it's implemented in dash. The visualization suggests that the model is learning semantic features, notice for example the figure/ground seperation. Attention head 7 in layer 5 also has the very interesting property that it seems to attend to what the patch is NOT a part of e.g. given a patch, it tends to attend to the surrounding objects as opposed to the selected one.
 
