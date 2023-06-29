@@ -7,7 +7,6 @@ from patcher import MaskedEmbedder
 from saccade import SaccadeCropper
 from torchvision.models import resnet50
 from transformers import Transformer
-from utils import ema_update
 try:
     from energy_transformer import EnergyTransformer
     ET_AVAILABLE = True
@@ -68,17 +67,20 @@ class JepaSkeleton(torch.nn.Module):
     def enable_util_norm(self, util_norm_name = "weight"):
         self.context_encoder.add_util_norm(norm_name = util_norm_name)
         self.target_encoder.add_util_norm(norm_name = util_norm_name)
+        self.predictor.add_util_norm(norm_name = util_norm_name)
     
     def save(self, path):
         had_util_norm = False
         if self.context_encoder.has_util_norm:
             self.context_encoder.remove_util_norm()
             self.target_encoder.remove_util_norm()
+            self.predictor.remove_util_norm()
             had_util_norm = True
         torch.save(self.state_dict(), path)
 
         if had_util_norm:
             self.enable_util_norm()
+            
     
 class IJepa(JepaSkeleton):
     """An image JEPA. This is slightly more abstract than the paper implementation (can be used with models other than classic ViTs).
@@ -286,6 +288,12 @@ class SaccadeJepa(torch.nn.Module):
         affines_pred = self.affine_predictor(target_pred.view(target_pred.shape[0], -1))
 
         return target, target_pred, affines, affines_pred
+    
+    def save(self, path):
+        torch.save(self.state_dict(), path)
+
+    def enable_util_norm(self):
+        raise NotImplementedError
     
 if __name__ == "__main__":
     sj = SaccadeJepa()

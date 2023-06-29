@@ -7,7 +7,7 @@ import einops
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from jepa import ViTJepa, EnergyIJepa, SaccadeJepa
-from utils import WarmUpScheduler, losses_to_running_loss, get_latest_file
+from utils import WarmUpScheduler, losses_to_running_loss, get_latest_file, ema_update
 from datasets import get_imagenet, ImageNet2017
 # need to do this for downloading on windows
 import ssl
@@ -284,10 +284,13 @@ def get_model(config, device):
             print(f"Loading model from {model_path}")
             model.load_state_dict(torch.load(model_path))
             start_epoch = int(model_path.split("_")[-2])
+        else:
+            start_epoch = 0
     else:
         start_epoch = 0
 
-    model.enable_util_norm()
+    if config["use_util_norm"]:
+        model.enable_util_norm()
 
     return model, start_epoch, loss_f
 
@@ -305,9 +308,9 @@ if __name__ == "__main__":
     warmup_epochs = config["n_epochs"] / config["warmup_epoch_fraction"]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    transform = torchvision.transforms.Compose([torchvision.transforms.RandomResizedCrop(config["h"], 
-                                                                                         config["w"],
-                                                                                         interpolation = "nearest"),
+    transform = torchvision.transforms.Compose([torchvision.transforms.RandomResizedCrop((config["h"], 
+                                                                                         config["w"]),
+                                                                                         interpolation = torchvision.transforms.InterpolationMode.NEAREST),
                                                 torchvision.transforms.RandomHorizontalFlip(0.5),
                                                 torchvision.transforms.ToTensor()])
 
@@ -377,7 +380,7 @@ if __name__ == "__main__":
                 scheduler.step()
 
                 # update after step
-                model.target_encoder.ema_update(model.context_encoder)
+                model.target_encoder = ema_update(model.target_encoder, model.context_encoder)
 
             print(f"\t\tDone. Mean Loss: {np.mean(mini_epoch_losses)}")
             epoch_losses.extend(mini_epoch_losses)

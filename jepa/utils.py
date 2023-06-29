@@ -43,6 +43,7 @@ def get_latest_file(path, name):
         file = None
     return file
 
-def ema_update(updated_model, new_model):
+def ema_update(updated_model, new_model, ema_decay = 0.996):
     for ema_param, new_param in zip(updated_model.parameters(), new_model.parameters()):
-        ema_param.data.copy_(ema_param.data * updated_model.ema_decay + (1 - updated_model.ema_decay) * new_param.data)
+        ema_param.data.copy_(ema_param.data * ema_decay + (1 - ema_decay) * new_param.data)
+    return updated_model

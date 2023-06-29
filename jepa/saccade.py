@@ -27,7 +27,8 @@ class SaccadeCropper(torch.nn.Module):
                  target_w = 224,
                  max_translation = 40,
                  max_rotation = 2,
-                 interp_mode = "nearest"
+                 interp_mode = "nearest",
+                 default_device = "cuda" if torch.cuda.is_available() else "cpu"
                  ):
         super().__init__()
         self.input_h = input_h
@@ -42,6 +43,7 @@ class SaccadeCropper(torch.nn.Module):
         self.max_rotation_rad = max_rotation * torch.pi / 180
         self.interp_mode = interp_mode
 
+        self.default_device = default_device
         self.requires_grad_(False)
 
 
@@ -49,8 +51,8 @@ class SaccadeCropper(torch.nn.Module):
         with torch.no_grad():
             b, c, h, w = x.shape
             # generate rotations of shape (b, 1)
-            rotations = torch.FloatTensor(b, 1).uniform_(-self.max_rotation_rad, self.max_rotation_rad)
-            translations = torch.FloatTensor(b, 2).uniform_(-self.max_translation_frac, self.max_translation_frac)
+            rotations = torch.empty(b, 1, device = self.default_device).uniform_(-self.max_rotation_rad, self.max_rotation_rad)
+            translations = torch.empty(b, 2, device = self.default_device).uniform_(-self.max_translation_frac, self.max_translation_frac)
 
             # apply the roations
             x_affined = rotate_and_translate_batch(x, 

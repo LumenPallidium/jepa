@@ -14,11 +14,13 @@ accumulation_steps : 8
 data_path : "D:/Projects/image_datasets"
 model : saccade
 model_save_name : saccade
+use_util_norm : False
 warmup_epoch_fraction : 8 # fraction of epochs to use for warmup, 1/8 by default
 
-val_every : 5 # run validation tasks every n mini-epochs, 0 means no validation
+val_every : 0 # run validation tasks every n mini-epochs, 0 means no validation
 tests : ["corr_dim", "plot"] # the tests to run for validation
 
+affine_loss_weight : 1.0
 
 lr : 0.0001
 weight_decay : 0.0001
