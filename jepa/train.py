@@ -6,7 +6,7 @@ import numpy as np
 import einops
 import matplotlib.pyplot as plt
 from tqdm import tqdm
-from jepa import ViTJepa, EnergyIJepa
+from jepa import ViTJepa, EnergyIJepa, SaccadeJepa
 from utils import WarmUpScheduler, losses_to_running_loss, get_latest_file
 from datasets import get_imagenet, ImageNet2017
 # need to do this for downloading on windows
@@ -80,6 +80,9 @@ def generate_val_data(model, dataset, device, batch_size = 64):
     return X, y
 
 def coerce_shapes(X, y = None, reduce = False, sample = 0.1, n_labels = None):
+    """Coerces the final shapes for the various tests run. Reduce means away
+    patches, yielding a single embedding per image. Samples the embeddings
+    to reduce the number of points involved, making classic ML methods tractable."""
     if reduce:
         X = X.mean(dim = 1)
     else:
@@ -231,15 +234,52 @@ def run_tests(test_list, model, data_val, device, epoch, sample = 4096):
         else:
             raise ValueError(f"Unknown test {test}")
 
+def ijepa_loss(config, model, x):
+    preds, x_targets, context_encoded = model(x)
+
+    loss = 0
+    for pred, x_target in zip(preds, x_targets):
+        # using huber loss cause MSE is too sensitive to outliers
+        loss += torch.nn.functional.huber_loss(pred, x_target)
+    # scale by number of targets and accumulation steps
+    loss /= len(preds) * config["accumulation_steps"]
+
+    # apply an additional VicReg inspired loss to decorrelate (mean) batch embeddings
+    if config["decorrelation_weight"]:
+        # mean over (unequal) lengths/patches 
+        mean_context = context_encoded.mean(dim = (1, 2))
+        cov_loss = torch.cov(mean_context).triu(diagonal = 1).abs().mean()
+        # scale by weight and number of accumulation steps
+        cov_loss *= config["decorrelation_weight"] / config["accumulation_steps"]
+
+        loss += cov_loss
+    return loss
+
+def saccade_loss(config, model, x):
+    target, target_pred, affines, affines_pred = model(x)
+
+    loss = torch.nn.functional.huber_loss(target_pred, target)
+    affine_loss = torch.nn.functional.mse_loss(affines_pred, affines)
+    loss += affine_loss * config["affine_loss_weight"]
+
+    loss /= config["accumulation_steps"]
+
+    return loss
+
 def get_model(config, device):
-    model = ViTJepa(config["h"], 
-                    config["w"], 
-                    patch_size = config["patch_size"], 
-                    n_targets = config["n_targets"]).to(device)
+    if config["model"] == "ijepa":
+        model = ViTJepa(config["h"], 
+                        config["w"], 
+                        patch_size = config["patch_size"], 
+                        n_targets = config["n_targets"]).to(device)
+        loss_f = ijepa_loss
+    elif config["model"] == "saccade":
+        model = SaccadeJepa().to(device)
+        loss_f = saccade_loss
     os.makedirs("../models", exist_ok = True)
 
     if os.path.exists("../models"):
-        model_path = get_latest_file("../models", "ijepa")
+        model_path = get_latest_file("../models", config["model"])
         if model_path is not None:
             print(f"Loading model from {model_path}")
             model.load_state_dict(torch.load(model_path))
@@ -249,8 +289,7 @@ def get_model(config, device):
 
     model.enable_util_norm()
 
-    return model, start_epoch
-
+    return model, start_epoch, loss_f
 
 # global for use anywhere
 config = yaml.safe_load(open("../config/training.yml", "r"))
@@ -266,8 +305,9 @@ if __name__ == "__main__":
     warmup_epochs = config["n_epochs"] / config["warmup_epoch_fraction"]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    transform = torchvision.transforms.Compose([torchvision.transforms.RandomResizedCrop((config["h"], 
-                                                                                          config["w"])),
+    transform = torchvision.transforms.Compose([torchvision.transforms.RandomResizedCrop(config["h"], 
+                                                                                         config["w"],
+                                                                                         interpolation = "nearest"),
                                                 torchvision.transforms.RandomHorizontalFlip(0.5),
                                                 torchvision.transforms.ToTensor()])
 
@@ -282,7 +322,7 @@ if __name__ == "__main__":
     steps_per_mini_epoch = config["mini_epoch_len"] // (config["batch_size"] * config["accumulation_steps"])
     steps_per_epoch = mini_epochs_per_epoch * steps_per_mini_epoch
 
-    model, start_epoch = get_model(config, device)
+    model, start_epoch, loss_f = get_model(config, device)
 
     optimizer = torch.optim.AdamW(model.parameters(), 
                                   lr = config["lr"], 
@@ -328,24 +368,7 @@ if __name__ == "__main__":
                     x = next(dataloader)
                     x = x.to(device)
                     
-                    preds, x_targets, context_encoded = model(x)
-
-                    loss = 0
-                    for pred, x_target in zip(preds, x_targets):
-                        # using huber loss cause MSE is too sensitive to outliers
-                        loss += torch.nn.functional.huber_loss(pred, x_target)
-                    # scale by number of targets and accumulation steps
-                    loss /= len(preds) * config["accumulation_steps"]
-
-                    # apply an additional VicReg inspired loss to decorrelate (mean) batch embeddings
-                    if config["decorrelation_weight"]:
-                        # mean over (unequal) lengths/patches 
-                        mean_context = context_encoded.mean(dim = (1, 2))
-                        cov_loss = torch.cov(mean_context).triu(diagonal = 1).abs().mean()
-                        # scale by weight and number of accumulation steps
-                        cov_loss *= config["decorrelation_weight"] / config["accumulation_steps"]
-
-                        loss += cov_loss
+                    loss = loss_f(config, model, x)
 
                     loss.backward()
                     mini_epoch_losses.append(loss.item())

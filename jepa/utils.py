@@ -42,3 +42,7 @@ def get_latest_file(path, name):
     except (ValueError, FileNotFoundError):
         file = None
     return file
+
+def ema_update(updated_model, new_model):
+    for ema_param, new_param in zip(updated_model.parameters(), new_model.parameters()):
+        ema_param.data.copy_(ema_param.data * updated_model.ema_decay + (1 - updated_model.ema_decay) * new_param.data)

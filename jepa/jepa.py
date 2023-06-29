@@ -4,7 +4,10 @@ import numpy as np
 from tqdm import tqdm
 from copy import deepcopy
 from patcher import MaskedEmbedder
+from saccade import SaccadeCropper
+from torchvision.models import resnet50
 from transformers import Transformer
+from utils import ema_update
 try:
     from energy_transformer import EnergyTransformer
     ET_AVAILABLE = True
@@ -230,5 +233,65 @@ class EnergyIJepa(IJepa):
                          context_encoder,
                          predictor)
 
-#TODO : look into adding VICReg losses on the encoders
+class SaccadeJepa(torch.nn.Module):
+    def __init__(self,
+                 embed_dim = (64, 24),
+                 model_input_size = (224, 224),
+                 full_input_size = (304, 304),
+                 transformer_depth = 12,
+                 transformer_heads = 8,
+                 transformer_dropout = 0.0,
+                 transformer_activation = torch.nn.GELU,
+                 ):
+        super().__init__()
+        self.model_input_size = model_input_size
+        self.full_input_size = full_input_size
+        self.embed_dim = embed_dim
+        self.class_dim = embed_dim[0] * embed_dim[1]
+
+        translation_max = (min(full_input_size) - max(model_input_size)) // 2
+
+        self.saccade_cropper = SaccadeCropper(input_h = full_input_size[0],
+                                              input_w = full_input_size[1],
+                                              target_h = model_input_size[0],
+                                              target_w = model_input_size[1],
+                                              max_translation = translation_max)
+
+        self.context_encoder = resnet50(num_classes = self.class_dim)
+        self.target_encoder = deepcopy(self.context_encoder).requires_grad_(False)
+
+        predictor = Transformer(dim = embed_dim[-1],
+                                depth = transformer_depth,
+                                heads = transformer_heads,
+                                dropout = transformer_dropout,
+                                context = embed_dim[0],
+                                activation = transformer_activation)
+        self.predictor = predictor
+
+        # TODO: test if this is better than the opposite : feeding affine info to the predictor
+        self.affine_predictor = torch.nn.Sequential(
+                                                    transformer_activation(),
+                                                    torch.nn.Linear(self.class_dim, 3),
+                                             )
+
+    def forward(self, x):
+        x_view_1, x_view_2, affines = self.saccade_cropper(x)
+        context = self.context_encoder(x_view_1)
+        target = self.target_encoder(x_view_2)
+
+        context = context.view(context.shape[0], *self.embed_dim)
+        target = target.view(target.shape[0], *self.embed_dim)
+
+        target_pred = self.predictor(context)
+        affines_pred = self.affine_predictor(target_pred.view(target_pred.shape[0], -1))
+
+        return target, target_pred, affines, affines_pred
     
+if __name__ == "__main__":
+    sj = SaccadeJepa()
+    x = torch.randn(1, 3, 304, 304)
+
+    target, target_pred, affines, affines_pred = sj(x)
+
+    assert target.shape == target_pred.shape, "Target and target prediction should have the same shape."
+    assert affines.shape == affines_pred.shape, "Affines and affine predictions should have the same shape."
