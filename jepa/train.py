@@ -312,6 +312,9 @@ if __name__ == "__main__":
                                                                                          config["w"]),
                                                                                          interpolation = torchvision.transforms.InterpolationMode.NEAREST),
                                                 torchvision.transforms.RandomHorizontalFlip(0.5),
+                                                # classic imagenet normalization transform
+                                                torchvision.transforms.Normalize(mean = [0.485, 0.456, 0.406],
+                                                                                    std = [0.229, 0.224, 0.225]),
                                                 torchvision.transforms.ToTensor()])
 
     data = get_imagenet(config["data_path"],
