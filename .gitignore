@@ -163,6 +163,7 @@ cython_debug/
 /data
 /applications
 /models
+/plots
 
 # data files
 *.csv

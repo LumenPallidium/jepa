@@ -26,13 +26,14 @@ def collate(x):
 def linear_probe_test(model, 
                     dataset,
                     device,
-                    n_categories = 101,
+                    n_categories = 1000,
                     probe_lr = 1e-3,
                     probe_weight_decay = 1e-4,
-                    val_epochs = 1,):
+                    val_epochs = 5,
+                    batch_size = 64):
     """Tests the model at a point in its training. Freezes the weights,
     stops the gradients, and trains a linear probe on the dataset"""
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size = 8, shuffle = True)
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size = batch_size, shuffle = True)
     model.eval()
     linear_probe = torch.nn.Linear(model.target_encoder.dim, n_categories).to(device)
 
@@ -48,7 +49,9 @@ def linear_probe_test(model,
                 x = model.encode(x)
             
             optimizer.zero_grad()
-            logits = linear_probe(x).mean(dim = 1)
+            logits = linear_probe(x)
+            if x.shape == 3:
+                logits = logits.mean(dim = 1)
             loss = torch.nn.functional.cross_entropy(logits, y)
 
             top1_acc = (logits.argmax(dim = 1) == y).float().mean()
@@ -83,28 +86,29 @@ def coerce_shapes(X, y = None, reduce = False, sample = 0.1, n_labels = None):
     """Coerces the final shapes for the various tests run. Reduce means away
     patches, yielding a single embedding per image. Samples the embeddings
     to reduce the number of points involved, making classic ML methods tractable."""
-    if reduce:
-        X = X.mean(dim = 1)
-    else:
-        if y is not None:
-            lengths = X.shape[1]
-            y = y.unsqueeze(1).repeat(1, lengths).flatten()
-
-            if n_labels is not None:
-                X = X[y < n_labels]
-                y = y[y < n_labels]
-
-        X = einops.rearrange(X, "b l d -> (b l) d")
-
-        if sample is not None:
-            if sample < 1:
-                n_samples = int(sample * X.shape[0])
-            else:
-                n_samples = int(sample)
-            perm = torch.randperm(X.shape[0])[:n_samples]
-            X = X[perm, :]
+    if X.shape == 3:
+        if reduce:
+            X = X.mean(dim = 1)
+        else:
             if y is not None:
-                y = y[perm]
+                lengths = X.shape[1]
+                y = y.unsqueeze(1).repeat(1, lengths).flatten()
+
+                if n_labels is not None:
+                    X = X[y < n_labels]
+                    y = y[y < n_labels]
+
+            X = einops.rearrange(X, "b l d -> (b l) d")
+
+    if sample is not None:
+        if sample < 1:
+            n_samples = int(sample * X.shape[0])
+        else:
+            n_samples = int(sample)
+        perm = torch.randperm(X.shape[0])[:n_samples]
+        X = X[perm, :]
+        if y is not None:
+            y = y[perm]
     return X, y
 
 def knn_test(X : torch.Tensor, 
@@ -128,7 +132,7 @@ def knn_test(X : torch.Tensor,
     
     print("All images embedded, fitting KNN...", end = "")
     knn.fit(X_np, y_np)
-    print(f"Done.\n\tKNN score: {knn.score(X_np, y_np)}\nEmbedding in 2D and plotting...", end = "")
+    print(f"Done.\n\tKNN score: {knn.score(X_np, y_np)}", end = "")
 
 def plot_embedding(X, y, k = 20, coerce_shape = True, reduce = True, sample = 0.002, epoch = None):
     from umap import UMAP
@@ -256,11 +260,21 @@ def ijepa_loss(config, model, x):
     return loss
 
 def saccade_loss(config, model, x):
-    target, target_pred, affines, affines_pred = model(x)
+    if model.predict_affines:
+        target, target_pred, affines, affines_pred = model(x)
 
-    loss = torch.nn.functional.huber_loss(target_pred, target)
-    affine_loss = torch.nn.functional.mse_loss(affines_pred, affines)
-    loss += affine_loss * config["affine_loss_weight"]
+        loss = torch.nn.functional.mse_loss(target_pred, target)
+        # doing seperate angle/cosine losses and magnitude losses
+        true_affine_magintude = torch.linalg.norm(affines, dim = -1)
+        pred_affine_magintude = torch.linalg.norm(affines_pred, dim = -1)
+        affine_cos_loss = torch.dot(affines, affines_pred) / (true_affine_magintude * pred_affine_magintude)
+        loss += affine_cos_loss.mean() * config["affine_cos_loss_weight"]
+
+        loss += (pred_affine_magintude - true_affine_magintude).abs().mean() * config["affine_mag_loss_weight"]
+    else:
+        target, target_pred = model(x)
+
+        loss = torch.nn.functional.mse_loss(target_pred, target)
 
     loss /= config["accumulation_steps"]
 
@@ -312,10 +326,10 @@ if __name__ == "__main__":
                                                                                          config["w"]),
                                                                                          interpolation = torchvision.transforms.InterpolationMode.NEAREST),
                                                 torchvision.transforms.RandomHorizontalFlip(0.5),
+                                                torchvision.transforms.ToTensor(),
                                                 # classic imagenet normalization transform
                                                 torchvision.transforms.Normalize(mean = [0.485, 0.456, 0.406],
-                                                                                    std = [0.229, 0.224, 0.225]),
-                                                torchvision.transforms.ToTensor()])
+                                                                                    std = [0.229, 0.224, 0.225]),])
 
     data = get_imagenet(config["data_path"],
                         split = "train",

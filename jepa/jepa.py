@@ -5,7 +5,7 @@ from tqdm import tqdm
 from copy import deepcopy
 from patcher import MaskedEmbedder
 from saccade import SaccadeCropper
-from torchvision.models import resnet50
+from torchvision.models import efficientnet_v2_l
 from transformers import Transformer
 try:
     from energy_transformer import EnergyTransformer
@@ -238,12 +238,14 @@ class EnergyIJepa(IJepa):
 class SaccadeJepa(torch.nn.Module):
     def __init__(self,
                  embed_dim = (64, 24),
-                 model_input_size = (224, 224),
-                 full_input_size = (304, 304),
+                 model_input_size = (112, 112),
+                 full_input_size = (224, 224),
                  transformer_depth = 12,
                  transformer_heads = 8,
                  transformer_dropout = 0.0,
                  transformer_activation = torch.nn.GELU,
+                 shift_percent = 0.9,
+                 predict_affines = False
                  ):
         super().__init__()
         self.model_input_size = model_input_size
@@ -251,7 +253,7 @@ class SaccadeJepa(torch.nn.Module):
         self.embed_dim = embed_dim
         self.class_dim = embed_dim[0] * embed_dim[1]
 
-        translation_max = (min(full_input_size) - max(model_input_size)) // 2
+        translation_max = int((min(full_input_size) - max(model_input_size)) * shift_percent)
 
         self.saccade_cropper = SaccadeCropper(input_h = full_input_size[0],
                                               input_w = full_input_size[1],
@@ -259,7 +261,8 @@ class SaccadeJepa(torch.nn.Module):
                                               target_w = model_input_size[1],
                                               max_translation = translation_max)
 
-        self.context_encoder = resnet50(num_classes = self.class_dim)
+        self.context_encoder = efficientnet_v2_l(num_classes = self.class_dim)
+        self.context_encoder.dim = self.class_dim
         self.target_encoder = deepcopy(self.context_encoder).requires_grad_(False)
 
         predictor = Transformer(dim = embed_dim[-1],
@@ -270,24 +273,42 @@ class SaccadeJepa(torch.nn.Module):
                                 activation = transformer_activation)
         self.predictor = predictor
 
-        # TODO: test if this is better than the opposite : feeding affine info to the predictor
-        self.affine_predictor = torch.nn.Sequential(
-                                                    transformer_activation(),
-                                                    torch.nn.Linear(self.class_dim, 3),
-                                             )
+        self.predict_affines = predict_affines
+        if predict_affines:
+            self.affine_predictor = torch.nn.Sequential(
+                                                        transformer_activation(),
+                                                        torch.nn.Linear(self.class_dim,
+                                                                        self.saccade_cropper.affine_embed_dim),
+                                                )
+        else:
+            self.affine_embedder = torch.nn.Sequential(
+                                                        transformer_activation(),
+                                                        torch.nn.Linear(self.saccade_cropper.affine_embed_dim, 
+                                                                        self.class_dim),
+                                                )
 
     def forward(self, x):
         x_view_1, x_view_2, affines = self.saccade_cropper(x)
         context = self.context_encoder(x_view_1)
         target = self.target_encoder(x_view_2)
 
+        # add affines as a positional encoding
+        if not self.predict_affines:
+            affines = self.affine_embedder(affines)
+            context += affines
+
         context = context.view(context.shape[0], *self.embed_dim)
         target = target.view(target.shape[0], *self.embed_dim)
 
         target_pred = self.predictor(context)
-        affines_pred = self.affine_predictor(target_pred.view(target_pred.shape[0], -1))
+        if self.predict_affines:
+            affines_pred = self.affine_predictor(target_pred.view(target_pred.shape[0], -1))
+            return target, target_pred, affines, affines_pred
 
-        return target, target_pred, affines, affines_pred
+        return target, target_pred
+    
+    def encode(self, x):
+        return self.target_encoder(x)
     
     def save(self, path):
         torch.save(self.state_dict(), path)
