@@ -90,15 +90,16 @@ def coerce_shapes(X, y = None, reduce = False, sample = 0.1, n_labels = None):
         if reduce:
             X = X.mean(dim = 1)
         else:
-            if y is not None:
-                lengths = X.shape[1]
-                y = y.unsqueeze(1).repeat(1, lengths).flatten()
-
-                if n_labels is not None:
-                    X = X[y < n_labels]
-                    y = y[y < n_labels]
 
             X = einops.rearrange(X, "b l d -> (b l) d")
+
+    if y is not None:
+        lengths = X.shape[1]
+        y = y.unsqueeze(1).repeat(1, lengths).flatten()
+
+        if n_labels is not None:
+            X = X[y < n_labels]
+            y = y[y < n_labels]
 
     if sample is not None:
         if sample < 1:
@@ -164,7 +165,8 @@ def corr_dimension(X,
                    coerce_shape = True, 
                    reduce = False, 
                    sample = 0.002,
-                   n_labels = 20):
+                   n_labels = 20,
+                   eps = 1e-12):
     """Correlation dimension, assumes X has already been stacked or reduced and is shape (n, dim)"""
     if coerce_shape and (len(X.shape) > 2):
         X, _ = coerce_shapes(X, reduce = reduce, sample = sample, n_labels = n_labels)
@@ -176,8 +178,8 @@ def corr_dimension(X,
         dists = torch.nn.functional.pdist(X)
 
         if log_eps is None:
-            min_log_eps = np.log(dists.min().item()) / np.log(base)
-            max_log_eps = np.log(dists.max().item()) / np.log(base)
+            min_log_eps = np.log(dists.min().item() + eps) / np.log(base)
+            max_log_eps = np.log(dists.max().item() + eps) / np.log(base)
             # use midpoint cause max skews corr dim calculation
             midpoint_log_eps = (min_log_eps + max_log_eps) / 2
             log_eps = np.linspace(min_log_eps, midpoint_log_eps, n_points)
@@ -261,9 +263,10 @@ def ijepa_loss(config, model, x):
 
 def saccade_loss(config, model, x):
     if model.predict_affines:
-        target, target_pred, affines, affines_pred = model(x)
+        target, target_pred, affines, affines_pred, cycle_loss = model(x)
 
         loss = torch.nn.functional.mse_loss(target_pred, target)
+        loss += cycle_loss * config["cycle_loss_weight"]
         # doing seperate angle/cosine losses and magnitude losses
         true_affine_magintude = torch.linalg.norm(affines, dim = -1)
         pred_affine_magintude = torch.linalg.norm(affines_pred, dim = -1)
@@ -272,9 +275,10 @@ def saccade_loss(config, model, x):
 
         loss += (pred_affine_magintude - true_affine_magintude).abs().mean() * config["affine_mag_loss_weight"]
     else:
-        target, target_pred = model(x)
+        target, target_pred, cycle_loss = model(x)
 
         loss = torch.nn.functional.mse_loss(target_pred, target)
+        loss += cycle_loss * config["cycle_loss_weight"]
 
     loss /= config["accumulation_steps"]
 
@@ -316,10 +320,11 @@ config = yaml.safe_load(open("../config/training.yml", "r"))
 #TODO : add function to print singular value count for network
 #TODO : vmap may not be working how i want it to in the network forward
 #TODO : should output of encoders be normalized? paper says nothing = no?
+#TODO : add cls token
+#TODO : for saccade jepa, add centering and temperature diff a la DINO
 
 if __name__ == "__main__":
     
-    warmup_epochs = config["n_epochs"] / config["warmup_epoch_fraction"]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     transform = torchvision.transforms.Compose([torchvision.transforms.RandomResizedCrop((config["h"], 
@@ -339,6 +344,7 @@ if __name__ == "__main__":
                             transform = transform,)
 
     mini_epochs_per_epoch = len(data) // config["mini_epoch_len"]
+    n_mini_epochs = config["n_epochs"] * mini_epochs_per_epoch
     steps_per_mini_epoch = config["mini_epoch_len"] // (config["batch_size"] * config["accumulation_steps"])
     steps_per_epoch = mini_epochs_per_epoch * steps_per_mini_epoch
 
@@ -349,11 +355,13 @@ if __name__ == "__main__":
                                   weight_decay = config["weight_decay"],
                                   betas = (config["beta1"], config["beta2"]),
                                   amsgrad = True)
+    
 
     scheduler = WarmUpScheduler(optimizer = optimizer,
                                 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR,
-                                warmup_iter = int(steps_per_epoch * warmup_epochs),
-                                total_iter = steps_per_epoch * config["n_epochs"],)
+                                warmup_iter = int(steps_per_epoch * config["n_epochs"] / config["warmup_epoch_fraction"]),
+                                total_iter = steps_per_epoch * config["n_epochs"],
+                                min_lr = config["min_lr"])
 
     losses = []
 

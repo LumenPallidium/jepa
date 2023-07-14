@@ -12,16 +12,51 @@ def get_leaf_modules(model):
             leaf_modules.append((n, module))
     return leaf_modules
 
+def optimize_step(input, lr, blur_kernel = None):
+    # add gradient by hand
+    grad = input.grad.data
+    if torch.any(grad != 0):
+        grad = grad / grad.abs().mean() # normalize gradient
 
-def deepdream_ijepa(input, layer_n, jepa_model, neuron_j = None, feedforward_layer = False, n_iters = 100):
+        #print(grad)
+        if blur_kernel is not None:
+            in_c = grad.shape[1]
+            blur_kernel = blur_kernel.expand(in_c, 1, 3, 3)
 
-    optimizer = torch.optim.SGD([input], lr = 0.1)
+            grad = torch.nn.functional.conv2d(grad, blur_kernel, padding = 1, groups = in_c)
+    
+
+    input.data.add_(grad * lr)
+    input.grad.data.zero_()
+    return input
+
+def get_imagenet_stats():
+    normalize = torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                std=[0.229, 0.224, 0.225])
+    denormalize = torchvision.transforms.Normalize(mean = [-0.485/0.229, -0.456/0.224, -0.406/0.225],
+                                                   std = [1/0.229, 1/0.224, 1/0.255])
+
+    return normalize, denormalize
+
+def deepdream_ijepa(input, layer_n, jepa_model,
+                     neuron_j = None, 
+                     feedforward_layer = False,
+                     n_iters = 100, 
+                     lr = 0.1,
+                     max_jitter = 32):
 
     model = jepa_model.target_encoder
+    normalize, denormalize = get_imagenet_stats()
+
+    input.requires_grad_(True)
 
     for i in tqdm(range(n_iters)):
-        input_embedded = jepa_model.embedder(input) + model.pos_embedding
-        optimizer.zero_grad()
+        input_embedded = normalize(input)
+
+        shift_x, shift_y = np.random.randint(-max_jitter, max_jitter + 1, 2)
+        input_embedded = torch.roll(torch.roll(input_embedded, shift_x, -1), shift_y, -2)
+
+        input_embedded = jepa_model.embedder(input_embedded) + model.pos_embedding
         for n, (attention, ff) in enumerate(model.layers):
             if n == layer_n:
                 if feedforward_layer:
@@ -33,14 +68,21 @@ def deepdream_ijepa(input, layer_n, jepa_model, neuron_j = None, feedforward_lay
                 input_embedded = input_embedded + attention(input_embedded)
                 input_embedded = input_embedded + ff(input_embedded)
 
+        input_embedded = torch.roll(torch.roll(x, -shift_x, -1), -shift_y, -2)
+
         if neuron_j is None:
             loss = input_embedded.norm()
         else:
             loss = input_embedded[0, neuron_j, :].norm()
              
         loss.backward()
-        optimizer.step()
-    return input.detach()
+
+        input = optimize_step(input, lr, 
+                              blur_kernel = blur_kernel)
+
+    input = denormalize(input).detach()
+
+    return torch.clamp(input, 0, 1)
 
 def deepdream_resnet(input, 
                      model, 
@@ -53,10 +95,7 @@ def deepdream_resnet(input,
                      max_jitter = 32,
                      blur_kernel = None,
                      leafs_or_children = "leafs"):
-    normalize = torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                std=[0.229, 0.224, 0.225])
-    denormalize = torchvision.transforms.Normalize(mean = [-0.485/0.229, -0.456/0.224, -0.406/0.225],
-                                                   std = [1/0.229, 1/0.224, 1/0.255])
+    normalize, denormalize = get_imagenet_stats()   
 
     input.requires_grad_(True)
 
@@ -84,7 +123,7 @@ def deepdream_resnet(input,
             downsampling = False
             for n, (name, layer) in enumerate(layers):
                 # you don't have to tell me how awful this is
-                # but the downsampling means you can't just iterate through layers
+                # but resnet downsampling means you can't just iterate through layers
                 if "layer" in name:
                     layer_num = name.split(".")[0][-1]
                     curr_layer = int(layer_num)
@@ -112,8 +151,6 @@ def deepdream_resnet(input,
                 if n == layer_n:
                     break
 
-        x = torch.roll(torch.roll(x, -shift_x, -1), -shift_y, -2)
-
         if len(x.shape) == 4:
             if channel is None:
                 loss = x.norm()
@@ -133,19 +170,8 @@ def deepdream_resnet(input,
 
         loss.backward()
 
-        # add gradient by hand
-        grad = input.grad.data
-        if torch.any(grad != 0):
-            grad = grad / grad.abs().mean() # normalize gradient
-            #print(grad)
-            if blur_kernel is not None:
-                in_c = grad.shape[1]
-                blur_kernel = blur_kernel.expand(in_c, 1, 3, 3)
-
-                grad = torch.nn.functional.conv2d(grad, blur_kernel, padding = 1, groups = in_c)
-
-        input.data.add_(grad * lr)
-        input.grad.data.zero_()
+        input = optimize_step(input, lr, 
+                              blur_kernel = blur_kernel)
 
     print(f"Stopping at layer {name} ({n}))")
     input = denormalize(input).detach()
@@ -176,13 +202,13 @@ if __name__ == "__main__":
                                 [2, 4, 2],
                                 [1, 2, 1]], device = device, dtype = torch.float32) / 16
 
-    #jepa_model, _, _ = get_model(config, device)
-    #_, sj = list(jepa_model.target_encoder.named_children())[0]
+    jepa_model, _, _ = get_model(config, device)
+    _, sj = list(jepa_model.target_encoder.named_children())[0]
 
     x = torch.rand(1, 3, 500, 500, device = device)
 
     if config["model"] == "ijepa":
-        y = deepdream_ijepa(x, 5, jepa_model, neuron_j = 42, feedforward_layer = False)
+        y = deepdream_ijepa(x, 5, jepa_model, neuron_j = 0, feedforward_layer = False)
         tensor2im(y.squeeze(0))
     elif config["model"] == "saccade":
         #resnet = torchvision.models.resnet50(weights = torchvision.models.ResNet50_Weights.IMAGENET1K_V2).to(device).requires_grad_(False)
@@ -197,8 +223,8 @@ if __name__ == "__main__":
                               leafs_or_children = "children")
         tensor2im(y.squeeze(0))
 
-        x = torch.rand(1, 3, 500, 500, device = device)
-        y = deepdream_octaves(x, inception, 
+        x = torch.rand(1, 3, 224, 224, device = device)
+        y = deepdream_octaves(x, sj, 
                               layer_n = 13, 
                               blur_kernel = blur_kernel,
                               leafs_or_children = "children")

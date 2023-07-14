@@ -36,6 +36,7 @@ def get_latest_file(path, name):
     """Util to get the most recent model checkpoints easily."""
     try:
         files = [os.path.join(path, f) for f in os.listdir(path) if name in f]
+        files = [f for f in files if ".pt" in f]
         file = max(files, key = os.path.getmtime)
         # replacing backslashes with forward slashes for windows
         file = file.replace("\\","/")

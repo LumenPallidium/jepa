@@ -16,8 +16,8 @@ def rotate_and_translate_batch(images, translation, theta, interp_mode = "neares
     # concat rotation with translation
     rot_mat = torch.cat([rot_mat, translation], dim = -1)
     
-    grid = torch.nn.functional.affine_grid(rot_mat, images.size())
-    return torch.nn.functional.grid_sample(images, grid, mode = interp_mode)
+    grid = torch.nn.functional.affine_grid(rot_mat, images.size(), align_corners = False)
+    return torch.nn.functional.grid_sample(images, grid, mode = interp_mode, align_corners = False)
 
 class SaccadeCropper(torch.nn.Module):
     def __init__(self,
@@ -79,13 +79,6 @@ class SaccadeCropper(torch.nn.Module):
             x1 = torchvision.transforms.functional.center_crop(x_affined, (self.target_h, self.target_w))
             x2 = torchvision.transforms.functional.center_crop(x, (self.target_h, self.target_w))
 
-            # TODO: look into shuffling x1 and x2 ACROSS BATCH
-            #views_stack = torch.stack([x1, x2], dim = 0)
-
-            #rand = torch.rand(views_stack.shape[0], views_stack.shape[1])
-            #rand_perm = rand.argsort(dim=0)
-
-            #x1, x2 = views_stack[0], views_stack[1]
         return x1, x2, transform_values
     
     def nerf_like_encoder(self, in_tensor, L = 10):

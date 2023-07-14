@@ -5,7 +5,7 @@ from tqdm import tqdm
 from copy import deepcopy
 from patcher import MaskedEmbedder
 from saccade import SaccadeCropper
-from torchvision.models import efficientnet_v2_l
+from torchvision.models import efficientnet_v2_l, resnet50
 from transformers import Transformer
 try:
     from energy_transformer import EnergyTransformer
@@ -240,18 +240,22 @@ class SaccadeJepa(torch.nn.Module):
                  embed_dim = (64, 24),
                  model_input_size = (112, 112),
                  full_input_size = (224, 224),
-                 transformer_depth = 12,
+                 predictor_depth = 3,
+                 predictor_activation = torch.nn.GELU,
+                 shift_percent = 0.9,
+                 predict_affines = False,
+                 transformer_predictor = False,
                  transformer_heads = 8,
                  transformer_dropout = 0.0,
-                 transformer_activation = torch.nn.GELU,
-                 shift_percent = 0.9,
-                 predict_affines = False
+                 use_cycle_consistency = True,
                  ):
         super().__init__()
         self.model_input_size = model_input_size
         self.full_input_size = full_input_size
         self.embed_dim = embed_dim
         self.class_dim = embed_dim[0] * embed_dim[1]
+        self.transformer_predictor = transformer_predictor
+        self.use_cycle_consistency = use_cycle_consistency
 
         translation_max = int((min(full_input_size) - max(model_input_size)) * shift_percent)
 
@@ -261,51 +265,73 @@ class SaccadeJepa(torch.nn.Module):
                                               target_w = model_input_size[1],
                                               max_translation = translation_max)
 
-        self.context_encoder = efficientnet_v2_l(num_classes = self.class_dim)
+        self.context_encoder = resnet50(num_classes = self.class_dim)
         self.context_encoder.dim = self.class_dim
         self.target_encoder = deepcopy(self.context_encoder).requires_grad_(False)
 
-        predictor = Transformer(dim = embed_dim[-1],
-                                depth = transformer_depth,
-                                heads = transformer_heads,
-                                dropout = transformer_dropout,
-                                context = embed_dim[0],
-                                activation = transformer_activation)
+
+        if transformer_predictor:
+            predictor = Transformer(dim = embed_dim[-1],
+                                    depth = predictor_depth,
+                                    heads = transformer_heads,
+                                    dropout = transformer_dropout,
+                                    context = embed_dim[0],
+                                    activation = predictor_activation)
+        else:
+            predictor = [torch.nn.Linear(self.class_dim, self.class_dim), predictor_activation()] * (predictor_depth - 1)
+            predictor = torch.nn.Sequential(*predictor, torch.nn.Linear(self.class_dim, self.class_dim))
         self.predictor = predictor
 
+
         self.predict_affines = predict_affines
+        assert not (self.predict_affines and self.use_cycle_consistency), "predict_affines and use_cycle_consistency can not both be True."
         if predict_affines:
             self.affine_predictor = torch.nn.Sequential(
-                                                        transformer_activation(),
+                                                        predictor_activation(),
                                                         torch.nn.Linear(self.class_dim,
                                                                         self.saccade_cropper.affine_embed_dim),
                                                 )
         else:
             self.affine_embedder = torch.nn.Sequential(
-                                                        transformer_activation(),
+                                                        predictor_activation(),
                                                         torch.nn.Linear(self.saccade_cropper.affine_embed_dim, 
                                                                         self.class_dim),
                                                 )
+        
 
     def forward(self, x):
         x_view_1, x_view_2, affines = self.saccade_cropper(x)
         context = self.context_encoder(x_view_1)
+        context_copy = context.clone().detach()
         target = self.target_encoder(x_view_2)
 
         # add affines as a positional encoding
         if not self.predict_affines:
-            affines = self.affine_embedder(affines)
-            context += affines
+            affines_emb = self.affine_embedder(affines)
+            context += affines_emb
 
-        context = context.view(context.shape[0], *self.embed_dim)
-        target = target.view(target.shape[0], *self.embed_dim)
-
+        if self.transformer_predictor:
+            context = context.view(context.shape[0], *self.embed_dim)
         target_pred = self.predictor(context)
+
+        # undo the predictor shaping
+        if self.transformer_predictor:
+            target_pred = target_pred.view(target_pred.shape[0], -1)
+
+        if self.use_cycle_consistency:
+            # the inverse affine embedding, note that since a mix of sins and cos are used, we can't just take the negative
+            affines_minus = self.affine_embedder(-affines)
+            cycled_context = self.predictor(target_pred + affines_minus)
+            # ensure the network properly "undoes" itself
+            cycle_loss = torch.nn.functional.mse_loss(cycled_context, context_copy)
+        else:
+            cycle_loss = 0
+
         if self.predict_affines:
             affines_pred = self.affine_predictor(target_pred.view(target_pred.shape[0], -1))
-            return target, target_pred, affines, affines_pred
+            return target, target_pred, affines, affines_pred, cycle_loss
 
-        return target, target_pred
+        return target, target_pred, cycle_loss
     
     def encode(self, x):
         return self.target_encoder(x)

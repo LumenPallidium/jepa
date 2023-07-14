@@ -22,8 +22,10 @@ tests : ["corr_dim", "plot", "knn"] # the tests to run for validation
 
 affine_cos_loss_weight : 1.0
 affin_mag_loss_weight : 0.5
+cycle_loss_weight : 0.5
 
-lr : 0.0001
+lr : 0.001
+min_lr : 0.0002
 weight_decay : 0.0001
 beta1 : 0.995
 beta2 : 0.999
