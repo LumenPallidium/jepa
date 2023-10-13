@@ -1,17 +1,20 @@
-h : 224
-w : 224
+h : 128
+w : 128
 
 # h : 224
 # w : 224
 # patch_size : 16
 # n_targets : 4 # number of target patches to use
 # decorrelation_weight : 0.1
-n_epochs : 3
-mini_epoch_len : 100000 # number of *steps* per mini-epoch
-batch_size : 64
-accumulation_steps : 8
+n_epochs : 2500
+mini_epoch_len : 192 # number of *steps* per mini-epoch
+batch_size : 32
+accumulation_steps : 1
+save_every : 250
+save_mini_epoch : False
 
-data_path : "D:/Projects/image_datasets"
+dataset : vesuvius
+data_path : "D:/Projects/scrolls" #"D:/Projects/image_datasets"
 model : saccade
 model_save_name : saccade
 use_util_norm : False
@@ -21,11 +24,13 @@ val_every : 0 # run validation tasks every n mini-epochs, 0 means no validation
 tests : ["corr_dim", "plot", "knn"] # the tests to run for validation
 
 affine_cos_loss_weight : 1.0
-affin_mag_loss_weight : 0.5
+affine_mag_loss_weight : 0.5
 cycle_loss_weight : 0.5
+vicreg_weight : 0.5
+vicreg_gamma : 1
 
-lr : 0.001
-min_lr : 0.0002
+lr : 0.0004
+min_lr : 0.00004
 weight_decay : 0.0001
 beta1 : 0.995
 beta2 : 0.999

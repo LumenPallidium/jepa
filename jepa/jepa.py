@@ -5,7 +5,7 @@ from tqdm import tqdm
 from copy import deepcopy
 from patcher import MaskedEmbedder
 from saccade import SaccadeCropper
-from torchvision.models import efficientnet_v2_l, resnet50
+from torchvision.models import efficientnet_v2_l, resnet50, inception_v3, convnext_small
 from transformers import Transformer
 try:
     from energy_transformer import EnergyTransformer
@@ -238,8 +238,8 @@ class EnergyIJepa(IJepa):
 class SaccadeJepa(torch.nn.Module):
     def __init__(self,
                  embed_dim = (64, 24),
-                 model_input_size = (112, 112),
-                 full_input_size = (224, 224),
+                 model_input_size = (128, 128),
+                 full_input_size = (200, 200),
                  predictor_depth = 3,
                  predictor_activation = torch.nn.GELU,
                  shift_percent = 0.9,
@@ -248,6 +248,7 @@ class SaccadeJepa(torch.nn.Module):
                  transformer_heads = 8,
                  transformer_dropout = 0.0,
                  use_cycle_consistency = True,
+                 model = None
                  ):
         super().__init__()
         self.model_input_size = model_input_size
@@ -264,10 +265,15 @@ class SaccadeJepa(torch.nn.Module):
                                               target_h = model_input_size[0],
                                               target_w = model_input_size[1],
                                               max_translation = translation_max)
-
-        self.context_encoder = resnet50(num_classes = self.class_dim)
-        self.context_encoder.dim = self.class_dim
-        self.target_encoder = deepcopy(self.context_encoder).requires_grad_(False)
+        
+        if model is None:
+            self.context_encoder = convnext_small(num_classes = self.class_dim)
+            self.context_encoder.dim = self.class_dim
+            self.target_encoder = deepcopy(self.context_encoder).requires_grad_(False)
+        else:
+            self.context_encoder = model(num_classes = self.class_dim)
+            self.context_encoder.dim = self.class_dim
+            self.target_encoder = deepcopy(self.context_encoder).requires_grad_(False)
 
 
         if transformer_predictor:
@@ -302,8 +308,13 @@ class SaccadeJepa(torch.nn.Module):
     def forward(self, x):
         x_view_1, x_view_2, affines = self.saccade_cropper(x)
         context = self.context_encoder(x_view_1)
-        context_copy = context.clone().detach()
         target = self.target_encoder(x_view_2)
+
+        if type(self.context_encoder).__name__ == "Inception3":
+            context = context[0]
+            target = target[0]
+            
+        context_copy = context.clone().detach()
 
         # add affines as a positional encoding
         if not self.predict_affines:
@@ -319,7 +330,7 @@ class SaccadeJepa(torch.nn.Module):
             target_pred = target_pred.view(target_pred.shape[0], -1)
 
         if self.use_cycle_consistency:
-            # the inverse affine embedding, note that since a mix of sins and cos are used, we can't just take the negative
+            # the inverse affine embedding, note that since a mix of sins and cos are used, we can't just take the negative of affines
             affines_minus = self.affine_embedder(-affines)
             cycled_context = self.predictor(target_pred + affines_minus)
             # ensure the network properly "undoes" itself

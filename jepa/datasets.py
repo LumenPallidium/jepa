@@ -2,6 +2,70 @@ import torch
 import torchvision
 import os
 import pickle
+from PIL import Image
+import tifffile
+import numpy as np
+import math
+
+class SmartCrop(torchvision.transforms.RandomResizedCrop):
+    """
+    This is a modified version of random resized crop.
+
+    It adds another layer of selection to the crop:
+    Only accept crops where the starting pixel is not empty.
+    """
+
+    def __init__(
+        self,
+        size,
+        scale=(0.08, 1.0),
+        ratio=(3.0 / 4.0, 4.0 / 3.0),
+        interpolation=torchvision.transforms.InterpolationMode.BILINEAR,
+        antialias = True,
+    ):
+        super().__init__(size = size,
+                         scale = scale,
+                         ratio = ratio,
+                         interpolation = interpolation,
+                         antialias = antialias)
+        
+    @staticmethod
+    def get_params(img, scale, ratio):
+        """Modified to check if pixel is empty before accepting crop"""
+
+        _, height, width = torchvision.transforms.functional.get_dimensions(img)
+        area = height * width
+
+        log_ratio = torch.log(torch.tensor(ratio))
+        for _ in range(10):
+            target_area = area * torch.empty(1).uniform_(scale[0], scale[1]).item()
+            aspect_ratio = torch.exp(torch.empty(1).uniform_(log_ratio[0], log_ratio[1])).item()
+
+            w = int(round(math.sqrt(target_area * aspect_ratio)))
+            h = int(round(math.sqrt(target_area / aspect_ratio)))
+
+            if 0 < w <= width and 0 < h <= height:
+                i = torch.randint(0, height - h + 1, size=(1,)).item()
+                j = torch.randint(0, width - w + 1, size=(1,)).item()
+                # modified here
+                if img[:, i, j] != 0:
+                    return i, j, h, w
+
+        # Fallback to central crop
+        in_ratio = float(width) / float(height)
+        if in_ratio < min(ratio):
+            w = width
+            h = int(round(w / min(ratio)))
+        elif in_ratio > max(ratio):
+            h = height
+            w = int(round(h * max(ratio)))
+        else:  # whole image
+            w = width
+            h = height
+        i = (height - h) // 2
+        j = (width - w) // 2
+        return i, j, h, w
+
 
 class ImageNet2017(torchvision.datasets.ImageFolder):
     """Class to handle the 2017 ImageNet dataset. This is a subclass of the ImageFolder
@@ -85,9 +149,126 @@ def reprocess_val(root):
                         os.path.join(out_path, image_class, raw_filename + ".JPEG"))
 
 
+class VesuviusDataset(torch.utils.data.Dataset):
+    def __init__(self,
+                 path,
+                 acceptable_size = 200 * 200,
+                 acceptable_missing = 0.1,
+                 transform = None,
+                 ):
+        """
+        A dataset class for the Vesuvius dataset. This dataset is a collection of tif files
+        with corresponding masks.
+
+        Parameters
+        ----------
+        path : str
+            The path to the directory containing the data.
+        acceptable_size : int, optional
+            The minimum number of nonmissing pixels required in a tif file to be included.
+            The default is 200 * 200.
+        transform : torchvision.transforms, optional
+            A transform to apply to the data. The default is None.
+        """
+        super().__init__()
+        self.path = path
+        self.transform = transform
+        self.tifs, self.masks = self.get_tifs()
+        self.acceptable_missing = acceptable_missing
+        if not os.path.exists(os.path.join(self.path, "tifs.pkl")):
+            self.preprocess(required_not_missing = acceptable_size)
+        else:
+            with open(os.path.join(self.path, "tifs.pkl"), 'rb') as f:
+                self.tifs = pickle.load(f)
+        self.valid_counter = 0
+
+    def get_tifs(self):
+        # get valid tifs in path
+        tifs = []
+        masks = {}
+        for root, dirs, files in os.walk(self.path):
+            for file in files:
+                if file.endswith(".tif"):
+                    if ("mask" not in file):
+                        tifs.append(os.path.join(root, file))
+                    else:
+                        tif_no_mask = file.replace("_mask", "")
+                        masks[os.path.join(root, tif_no_mask)] = os.path.join(root, file)
+
+        return tifs, masks
+
+    def preprocess(self, required_not_missing = 100 * 200):
+        clean_tifs = []
+        for tif in self.tifs:
+            tif_img = tifffile.imread(tif)
+
+            # check for missing data
+            not_missing = np.sum(np.array(tif_img) != 0)
+            if not_missing < required_not_missing:
+                print(f"Skipping {tif} due to lack of nonmissing data ({not_missing} good pixels)")
+                continue
+
+            clean_tifs.append(tif)
+        
+        print(f"Found {len(clean_tifs)} valid tifs (removed {len(self.tifs) - len(clean_tifs)})")
+        self.tifs = clean_tifs
+
+        # save the tifs
+        with open(os.path.join(self.path, "tifs.pkl"), 'wb') as f:
+            pickle.dump(self.tifs, f)
+
+    def __getitem__(self, index):
+        path = self.tifs[index]
+        img_pil = tifffile.imread(path)
+
+        # convert uint16 to float32
+        img_pil = img_pil.astype(np.float32) / 65535
+            
+        if self.transform is not None:
+
+            img = self.transform(img_pil)
+            # keep transforming until we get a valid image
+            missing = torch.sum(img == 0) / torch.numel(img)
+            n_tries = 0
+            while missing > self.acceptable_missing:
+                img = self.transform(img_pil)
+                missing = torch.sum(img == 0) / torch.numel(img)
+                n_tries += 1
+                if n_tries > 10:
+                    break
+            self.valid_counter += n_tries
+        else:
+            img = img_pil
+        return img
+
+    def __len__(self):
+        return len(self.tifs)
+    
+VESUVIUS_TRANSFORM = torchvision.transforms.Compose([torchvision.transforms.ToTensor(),
+                                            SmartCrop((200, 
+                                                       200),
+                                                       interpolation = torchvision.transforms.InterpolationMode.NEAREST),
+                                            torchvision.transforms.RandomHorizontalFlip(0.5),
+                                            torchvision.transforms.RandomVerticalFlip(0.5),
+                                            torchvision.transforms.RandomVerticalFlip(0.5),])
+
 #TODO : add updates for validation data (which does not have the same structure as train data)
 if __name__ == "__main__":
-    root = "Z:/"
-    split = "val"
-    dataset = get_imagenet(root, split = split)
+    from tqdm import tqdm
+    test_imagenet = False
+
+    if test_imagenet:
+        root = "Z:/"
+        split = "val"
+        dataset = get_imagenet(root, split = split)
+    else:
+        root = "D:/Projects/scrolls"
+        dataset = VesuviusDataset(root, transform = VESUVIUS_TRANSFORM)
+
+        for i in tqdm(range(1000)):
+            j = np.random.randint(len(dataset))
+            dataset[j]
+
+        print(f"Average number of tries to get valid image: {dataset.valid_counter / 1000}")
+
         

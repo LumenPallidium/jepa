@@ -8,8 +8,8 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 from jepa import ViTJepa, EnergyIJepa, SaccadeJepa
 from utils import WarmUpScheduler, losses_to_running_loss, get_latest_file, ema_update
-from datasets import get_imagenet, ImageNet2017
-# need to do this for downloading on windows
+from datasets import get_imagenet, ImageNet2017, VesuviusDataset, VESUVIUS_TRANSFORM
+# need to do this for downloading on windows - SAD!
 import ssl
 ssl._create_default_https_context = ssl._create_unverified_context
 
@@ -21,7 +21,6 @@ def tensor2im(x):
 def collate(x):
     x = [x_i[0] for x_i in x]
     return torch.stack(x, dim = 0)
-
 
 def linear_probe_test(model, 
                     dataset,
@@ -261,7 +260,7 @@ def ijepa_loss(config, model, x):
         loss += cov_loss
     return loss
 
-def saccade_loss(config, model, x):
+def saccade_loss(config, model, x, vicreg = True, eps = 1e-8):
     if model.predict_affines:
         target, target_pred, affines, affines_pred, cycle_loss = model(x)
 
@@ -277,8 +276,25 @@ def saccade_loss(config, model, x):
     else:
         target, target_pred, cycle_loss = model(x)
 
-        loss = torch.nn.functional.mse_loss(target_pred, target)
+        loss = torch.nn.functional.huber_loss(target_pred, target)
         loss += cycle_loss * config["cycle_loss_weight"]
+
+    if vicreg:
+        target_mean = target.mean(dim = 0, keepdim = True)
+        target_pred_mean = target_pred.mean(dim = 0, keepdim = True)
+
+        # (d x N) @ (N x d) = (d x d)
+        covariance = (target - target_mean).T @ (target_pred - target_pred_mean)
+
+        # first vicreg term
+        invariance = config["vicreg_gamma"] - (covariance.diag() + eps).abs().sqrt()
+        invariance = torch.nn.functional.relu(invariance).mean()
+
+        # second vicreg term
+        square_variance = covariance.triu().pow(2).sum() / covariance.shape[0]
+
+        # TODO : some authors give these seperate weights
+        loss += config["vicreg_weight"] * (invariance + square_variance)
 
     loss /= config["accumulation_steps"]
 
@@ -327,21 +343,23 @@ if __name__ == "__main__":
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    transform = torchvision.transforms.Compose([torchvision.transforms.RandomResizedCrop((config["h"], 
+    if config["dataset"] == "imagenet":
+        transform = torchvision.transforms.Compose([torchvision.transforms.RandomResizedCrop((config["h"], 
                                                                                          config["w"]),
                                                                                          interpolation = torchvision.transforms.InterpolationMode.NEAREST),
                                                 torchvision.transforms.RandomHorizontalFlip(0.5),
-                                                torchvision.transforms.ToTensor(),
-                                                # classic imagenet normalization transform
-                                                torchvision.transforms.Normalize(mean = [0.485, 0.456, 0.406],
-                                                                                    std = [0.229, 0.224, 0.225]),])
-
-    data = get_imagenet(config["data_path"],
-                        split = "train",
-                        transform = transform,)
-    data_val = get_imagenet(config["data_path"],
-                            split = "val",
+                                                torchvision.transforms.ToTensor()])
+        data = get_imagenet(config["data_path"],
+                            split = "train",
                             transform = transform,)
+        data_val = get_imagenet(config["data_path"],
+                                split = "val",
+                                transform = transform,)
+    elif config["dataset"] == "vesuvius":
+        data = VesuviusDataset(config["data_path"], 
+                               transform = VESUVIUS_TRANSFORM)
+        data_val = None
+        
 
     mini_epochs_per_epoch = len(data) // config["mini_epoch_len"]
     n_mini_epochs = config["n_epochs"] * mini_epochs_per_epoch
@@ -381,10 +399,11 @@ if __name__ == "__main__":
             print(f"\tMini Epoch {mini_epoch + 1}")
 
             model_save_name = config["model_save_name"]
-            save_path = f"../models/{model_save_name}_{epoch}_{mini_epoch}.pt"
-            model.save(save_path)
+            if config["save_mini_epoch"]:
+                save_path = f"../models/{model_save_name}_{epoch}_{mini_epoch}.pt"
+                model.save(save_path)
 
-            if (config["val_every"] != 0) and (mini_epoch % config["val_every"] == 0):
+            if (config["val_every"] != 0) and (mini_epoch % config["val_every"] == 0) and (data_val is not None):
                 run_tests(config["tests"], model, data_val, device, epoch)
 
             mini_epoch_losses = []
@@ -395,6 +414,10 @@ if __name__ == "__main__":
                 for j in range(config["accumulation_steps"]):
                     x = next(dataloader)
                     x = x.to(device)
+
+                    # add channel dimension if necessary
+                    if len(x.shape) == 3:
+                        x = x.unsqueeze(1).repeat(1, 3, 1, 1)
                     
                     loss = loss_f(config, model, x)
 
@@ -414,7 +437,13 @@ if __name__ == "__main__":
         losses.extend(epoch_losses)
 
         save_path = f"../models/{model_save_name}_{epoch + 1}_start.pt"
-        model.save(save_path)
+        if epoch_i % config["save_every"] == 0:
+            model.save(save_path)
+
+
+    print("Done.")
+    save_path = f"../models/{model_save_name}_end.pt"
+    model.save(save_path)
 
     running_losses = losses_to_running_loss(losses)
     log_losses = np.log(running_losses)
