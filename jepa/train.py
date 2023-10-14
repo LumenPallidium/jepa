@@ -155,7 +155,6 @@ def plot_embedding(X, y, k = 20, coerce_shape = True, reduce = True, sample = 0.
     fig.savefig(f"../plots/embedding_{epoch}.png", dpi = 300)
     plt.close(fig)
 
-
 def corr_dimension(X, 
                    log_eps : np.array = None,
                    n_points = 10,
@@ -212,7 +211,6 @@ def corr_dimension(X,
         log_slope = np.polyfit(log_eps, log_corr_integrals, 1)[0]
     print(f"\tCorrelation Dimension: {np.round(log_slope, 4)}")
 
-
 def run_tests(test_list, model, data_val, device, epoch, sample = 4096):
     """Slightly inefficent and a bit verbose, but makes a nice wrapper so you can 
     specify tests in a list"""
@@ -267,34 +265,33 @@ def saccade_loss(config, model, x, vicreg = True, eps = 1e-8):
         loss = torch.nn.functional.mse_loss(target_pred, target)
         loss += cycle_loss * config["cycle_loss_weight"]
         # doing seperate angle/cosine losses and magnitude losses
-        true_affine_magintude = torch.linalg.norm(affines, dim = -1)
-        pred_affine_magintude = torch.linalg.norm(affines_pred, dim = -1)
-        affine_cos_loss = torch.dot(affines, affines_pred) / (true_affine_magintude * pred_affine_magintude)
+        true_affine_magnitude = torch.linalg.norm(affines, dim = -1)
+        pred_affine_magnitude = torch.linalg.norm(affines_pred, dim = -1)
+        affine_cos_loss = torch.dot(affines, affines_pred) / (true_affine_magnitude * pred_affine_magnitude)
         loss += affine_cos_loss.mean() * config["affine_cos_loss_weight"]
 
-        loss += (pred_affine_magintude - true_affine_magintude).abs().mean() * config["affine_mag_loss_weight"]
+        loss += (pred_affine_magnitude - true_affine_magnitude).abs().mean() * config["affine_mag_loss_weight"]
     else:
-        target, target_pred, cycle_loss = model(x)
+        target, context, target_pred, cycle_loss = model(x)
 
         loss = torch.nn.functional.huber_loss(target_pred, target)
         loss += cycle_loss * config["cycle_loss_weight"]
 
     if vicreg:
-        target_mean = target.mean(dim = 0, keepdim = True)
-        target_pred_mean = target_pred.mean(dim = 0, keepdim = True)
+        context_mean = context.mean(dim = 0, keepdim = True)
 
-        # (d x N) @ (N x d) = (d x d)
-        covariance = (target - target_mean).T @ (target_pred - target_pred_mean)
+        # variance term
+        variance_context = config["vicreg_gamma"] - (context.var(dim = 0) + eps).sqrt()
+        variance = torch.nn.functional.relu(variance_context).mean()
 
-        # first vicreg term
-        invariance = config["vicreg_gamma"] - (covariance.diag() + eps).abs().sqrt()
-        invariance = torch.nn.functional.relu(invariance).mean()
+        # covariance term
+        # (d x batch) @ (batch x d) = (d x d)
+        covariance_context = (context - context_mean).T @ (context - context_mean) / context.shape[0]
 
         # second vicreg term
-        square_variance = covariance.triu().pow(2).sum() / covariance.shape[0]
-
-        # TODO : some authors give these seperate weights
-        loss += config["vicreg_weight"] * (invariance + square_variance)
+        covariance = covariance_context.triu().pow(2).sum()
+        covariance /= covariance_context.shape[0]
+        loss += config["variance_weight"] * variance + config["covariance_weight"] * covariance
 
     loss /= config["accumulation_steps"]
 
@@ -308,7 +305,7 @@ def get_model(config, device):
                         n_targets = config["n_targets"]).to(device)
         loss_f = ijepa_loss
     elif config["model"] == "saccade":
-        model = SaccadeJepa().to(device)
+        model = SaccadeJepa(in_channels = config["in_channels"]).to(device)
         loss_f = saccade_loss
     os.makedirs("../models", exist_ok = True)
 
@@ -317,7 +314,10 @@ def get_model(config, device):
         if model_path is not None:
             print(f"Loading model from {model_path}")
             model.load_state_dict(torch.load(model_path))
-            start_epoch = int(model_path.split("_")[-2])
+            try:
+                start_epoch = int(model_path.split("_")[-2])
+            except:
+                start_epoch = 0
         else:
             start_epoch = 0
     else:
@@ -360,7 +360,6 @@ if __name__ == "__main__":
                                transform = VESUVIUS_TRANSFORM)
         data_val = None
         
-
     mini_epochs_per_epoch = len(data) // config["mini_epoch_len"]
     n_mini_epochs = config["n_epochs"] * mini_epochs_per_epoch
     steps_per_mini_epoch = config["mini_epoch_len"] // (config["batch_size"] * config["accumulation_steps"])
@@ -374,7 +373,6 @@ if __name__ == "__main__":
                                   betas = (config["beta1"], config["beta2"]),
                                   amsgrad = True)
     
-
     scheduler = WarmUpScheduler(optimizer = optimizer,
                                 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR,
                                 warmup_iter = int(steps_per_epoch * config["n_epochs"] / config["warmup_epoch_fraction"]),
@@ -395,7 +393,6 @@ if __name__ == "__main__":
         epoch_losses = []
 
         for mini_epoch in range(mini_epochs_per_epoch):
-
             print(f"\tMini Epoch {mini_epoch + 1}")
 
             model_save_name = config["model_save_name"]
@@ -414,10 +411,8 @@ if __name__ == "__main__":
                 for j in range(config["accumulation_steps"]):
                     x = next(dataloader)
                     x = x.to(device)
-
-                    # add channel dimension if necessary
-                    if len(x.shape) == 3:
-                        x = x.unsqueeze(1).repeat(1, 3, 1, 1)
+                    # add channel dim
+                    x = x.unsqueeze(1)
                     
                     loss = loss_f(config, model, x)
 
@@ -439,7 +434,6 @@ if __name__ == "__main__":
         save_path = f"../models/{model_save_name}_{epoch + 1}_start.pt"
         if epoch_i % config["save_every"] == 0:
             model.save(save_path)
-
 
     print("Done.")
     save_path = f"../models/{model_save_name}_end.pt"

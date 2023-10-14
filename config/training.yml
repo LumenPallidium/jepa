@@ -1,14 +1,14 @@
 h : 128
 w : 128
-
+in_channels : 1
 # h : 224
 # w : 224
 # patch_size : 16
 # n_targets : 4 # number of target patches to use
 # decorrelation_weight : 0.1
-n_epochs : 2500
+n_epochs : 50
 mini_epoch_len : 192 # number of *steps* per mini-epoch
-batch_size : 32
+batch_size : 64
 accumulation_steps : 1
 save_every : 250
 save_mini_epoch : False
@@ -25,12 +25,14 @@ tests : ["corr_dim", "plot", "knn"] # the tests to run for validation
 
 affine_cos_loss_weight : 1.0
 affine_mag_loss_weight : 0.5
-cycle_loss_weight : 0.5
-vicreg_weight : 0.5
-vicreg_gamma : 1
+cycle_loss_weight : 0.25
+variance_weight : 25
+covariance_weight : 1
 
-lr : 0.0004
-min_lr : 0.00004
+vicreg_gamma : 4
+
+lr : 0.0005
+min_lr : 0.00001
 weight_decay : 0.0001
 beta1 : 0.995
 beta2 : 0.999

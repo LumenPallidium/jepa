@@ -13,6 +13,9 @@ class SmartCrop(torchvision.transforms.RandomResizedCrop):
 
     It adds another layer of selection to the crop:
     Only accept crops where the starting pixel is not empty.
+
+    Additionally, the scale parameter now affects scale of the crop, 
+    not the scale of the image.
     """
 
     def __init__(
@@ -29,12 +32,12 @@ class SmartCrop(torchvision.transforms.RandomResizedCrop):
                          interpolation = interpolation,
                          antialias = antialias)
         
-    @staticmethod
-    def get_params(img, scale, ratio):
+
+    def get_params(self, img, scale, ratio):
         """Modified to check if pixel is empty before accepting crop"""
 
         _, height, width = torchvision.transforms.functional.get_dimensions(img)
-        area = height * width
+        area = self.size[0] * self.size[1]
 
         log_ratio = torch.log(torch.tensor(ratio))
         for _ in range(10):
@@ -199,8 +202,14 @@ class VesuviusDataset(torch.utils.data.Dataset):
 
     def preprocess(self, required_not_missing = 100 * 200):
         clean_tifs = []
+        running_mean = None
+        running_var = None
+
         for tif in self.tifs:
             tif_img = tifffile.imread(tif)
+
+            # convert uint16 to float32
+            tif_img = tif_img.astype(np.float32) / 65535
 
             # check for missing data
             not_missing = np.sum(np.array(tif_img) != 0)
@@ -208,9 +217,18 @@ class VesuviusDataset(torch.utils.data.Dataset):
                 print(f"Skipping {tif} due to lack of nonmissing data ({not_missing} good pixels)")
                 continue
 
+            # calc running mean and var
+            if running_mean is None:
+                running_mean = tif_img.mean()
+                running_var = tif_img.var()
+            else:
+                running_mean = (running_mean + tif_img.mean()) / 2
+                running_var = (running_var + tif_img.var()) / 2
+
             clean_tifs.append(tif)
         
         print(f"Found {len(clean_tifs)} valid tifs (removed {len(self.tifs) - len(clean_tifs)})")
+        print(f"Running mean: {running_mean}, running var: {running_var}")
         self.tifs = clean_tifs
 
         # save the tifs
@@ -247,10 +265,13 @@ class VesuviusDataset(torch.utils.data.Dataset):
 VESUVIUS_TRANSFORM = torchvision.transforms.Compose([torchvision.transforms.ToTensor(),
                                             SmartCrop((200, 
                                                        200),
+                                                       scale = (0.9, 1.1),
+                                                       ratio = (1, 1),
                                                        interpolation = torchvision.transforms.InterpolationMode.NEAREST),
                                             torchvision.transforms.RandomHorizontalFlip(0.5),
                                             torchvision.transforms.RandomVerticalFlip(0.5),
-                                            torchvision.transforms.RandomVerticalFlip(0.5),])
+                                            torchvision.transforms.Normalize(mean = [0.395],
+                                                                             std = [0.386])])
 
 #TODO : add updates for validation data (which does not have the same structure as train data)
 if __name__ == "__main__":

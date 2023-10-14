@@ -5,8 +5,8 @@ from tqdm import tqdm
 from copy import deepcopy
 from patcher import MaskedEmbedder
 from saccade import SaccadeCropper
-from torchvision.models import efficientnet_v2_l, resnet50, inception_v3, convnext_small
-from transformers import Transformer
+from torchvision.models import efficientnet_v2_l, resnet50, inception_v3, convnext_tiny
+from transformer import Transformer
 try:
     from energy_transformer import EnergyTransformer
     ET_AVAILABLE = True
@@ -240,6 +240,8 @@ class SaccadeJepa(torch.nn.Module):
                  embed_dim = (64, 24),
                  model_input_size = (128, 128),
                  full_input_size = (200, 200),
+                 in_channels = 3,
+                 expected_in_channels = 3,
                  predictor_depth = 3,
                  predictor_activation = torch.nn.GELU,
                  shift_percent = 0.9,
@@ -258,6 +260,13 @@ class SaccadeJepa(torch.nn.Module):
         self.transformer_predictor = transformer_predictor
         self.use_cycle_consistency = use_cycle_consistency
 
+        if expected_in_channels != in_channels:
+            self.input_transform = torch.nn.Conv2d(in_channels, 
+                                                   expected_in_channels, 
+                                                   1)
+        else:
+            self.input_transform = torch.nn.Identity()
+
         translation_max = int((min(full_input_size) - max(model_input_size)) * shift_percent)
 
         self.saccade_cropper = SaccadeCropper(input_h = full_input_size[0],
@@ -267,7 +276,7 @@ class SaccadeJepa(torch.nn.Module):
                                               max_translation = translation_max)
         
         if model is None:
-            self.context_encoder = convnext_small(num_classes = self.class_dim)
+            self.context_encoder = convnext_tiny(num_classes = self.class_dim)
             self.context_encoder.dim = self.class_dim
             self.target_encoder = deepcopy(self.context_encoder).requires_grad_(False)
         else:
@@ -306,15 +315,23 @@ class SaccadeJepa(torch.nn.Module):
         
 
     def forward(self, x):
+        x = self.input_transform(x)
         x_view_1, x_view_2, affines = self.saccade_cropper(x)
+
+        # randomly swap views
+        if np.random.rand() > 0.5:
+            x_view_1, x_view_2 = x_view_2, x_view_1
+            affines = -affines
+
         context = self.context_encoder(x_view_1)
-        target = self.target_encoder(x_view_2)
+        with torch.no_grad():
+            target = self.target_encoder(x_view_2)
 
         if type(self.context_encoder).__name__ == "Inception3":
             context = context[0]
             target = target[0]
             
-        context_copy = context.clone().detach()
+        context_copy = context.clone()
 
         # add affines as a positional encoding
         if not self.predict_affines:
@@ -342,7 +359,7 @@ class SaccadeJepa(torch.nn.Module):
             affines_pred = self.affine_predictor(target_pred.view(target_pred.shape[0], -1))
             return target, target_pred, affines, affines_pred, cycle_loss
 
-        return target, target_pred, cycle_loss
+        return target, context_copy, target_pred, cycle_loss
     
     def encode(self, x):
         return self.target_encoder(x)
