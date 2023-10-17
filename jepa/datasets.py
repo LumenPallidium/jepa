@@ -263,8 +263,8 @@ class VesuviusDataset(torch.utils.data.Dataset):
         return len(self.tifs)
     
 VESUVIUS_TRANSFORM = torchvision.transforms.Compose([torchvision.transforms.ToTensor(),
-                                            SmartCrop((200, 
-                                                       200),
+                                            SmartCrop((128, 
+                                                       128),
                                                        scale = (0.9, 1.1),
                                                        ratio = (1, 1),
                                                        interpolation = torchvision.transforms.InterpolationMode.NEAREST),

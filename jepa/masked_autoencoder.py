@@ -77,13 +77,17 @@ class MaskedAutoencoder(torch.nn.Module):
         loss = self.loss(x_out[img_mask], x[img_mask])
         return loss
     
+    def save(self, path):
+        torch.save(self.state_dict(), path)
+
+    
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = MaskedAutoencoder(128,
                               128,
                               patch_size = 16).to(device)
     
-    x = torch.randn(1, 1, 128, 128).to(device)
+    x = torch.randn(8, 1, 128, 128).to(device)
 
     print(model(x).shape)
     print(model.get_loss(x))

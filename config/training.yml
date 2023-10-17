@@ -3,10 +3,10 @@ w : 128
 in_channels : 1
 # h : 224
 # w : 224
-# patch_size : 16
+patch_size : 8
 # n_targets : 4 # number of target patches to use
 # decorrelation_weight : 0.1
-n_epochs : 50
+n_epochs : 2500
 mini_epoch_len : 192 # number of *steps* per mini-epoch
 batch_size : 64
 accumulation_steps : 1
@@ -15,8 +15,8 @@ save_mini_epoch : False
 
 dataset : vesuvius
 data_path : "D:/Projects/scrolls" #"D:/Projects/image_datasets"
-model : saccade
-model_save_name : saccade
+model : mae
+model_save_name : mae
 use_util_norm : False
 warmup_epoch_fraction : 8 # fraction of epochs to use for warmup, 1/8 by default
 
@@ -34,5 +34,5 @@ vicreg_gamma : 4
 lr : 0.0005
 min_lr : 0.00001
 weight_decay : 0.0001
-beta1 : 0.995
-beta2 : 0.999
+beta1 : 0.9
+beta2 : 0.99

@@ -316,7 +316,7 @@ def get_model(config, device):
         loss_f = saccade_loss
     elif config["model"] == "mae":
         model = MaskedAutoencoder(config["h"],
-                                  config["w"],
+                                  w = config["w"],
                                   patch_size = config["patch_size"],
                                   in_channels = config["in_channels"]).to(device)
         loss_f = mae_loss
@@ -435,8 +435,9 @@ if __name__ == "__main__":
                 optimizer.step()
                 scheduler.step()
 
-                # update after step
-                model.target_encoder = ema_update(model.target_encoder, model.context_encoder)
+                if not isinstance(model, MaskedAutoencoder):
+                    # update after step
+                    model.target_encoder = ema_update(model.target_encoder, model.context_encoder)
 
             print(f"\t\tDone. Mean Loss: {np.mean(mini_epoch_losses)}")
             epoch_losses.extend(mini_epoch_losses)
