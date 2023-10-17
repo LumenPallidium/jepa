@@ -7,6 +7,7 @@ import einops
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from jepa import ViTJepa, EnergyIJepa, SaccadeJepa
+from masked_autoencoder import MaskedAutoencoder
 from utils import WarmUpScheduler, losses_to_running_loss, get_latest_file, ema_update
 from datasets import get_imagenet, ImageNet2017, VesuviusDataset, VESUVIUS_TRANSFORM
 # need to do this for downloading on windows - SAD!
@@ -297,6 +298,12 @@ def saccade_loss(config, model, x, vicreg = True, eps = 1e-8):
 
     return loss
 
+def mae_loss(config, model, x,):
+    # this is just a wrapper for interop
+    loss = model.get_loss(x)
+    loss /= config["accumulation_steps"]
+    return loss
+
 def get_model(config, device):
     if config["model"] == "ijepa":
         model = ViTJepa(config["h"], 
@@ -307,7 +314,12 @@ def get_model(config, device):
     elif config["model"] == "saccade":
         model = SaccadeJepa(in_channels = config["in_channels"]).to(device)
         loss_f = saccade_loss
-    os.makedirs("../models", exist_ok = True)
+    elif config["model"] == "mae":
+        model = MaskedAutoencoder(config["h"],
+                                  config["w"],
+                                  patch_size = config["patch_size"],
+                                  in_channels = config["in_channels"]).to(device)
+        loss_f = mae_loss
 
     if os.path.exists("../models"):
         model_path = get_latest_file("../models", config["model"])
@@ -321,6 +333,7 @@ def get_model(config, device):
         else:
             start_epoch = 0
     else:
+        os.makedirs("../models", exist_ok = True)
         start_epoch = 0
 
     if config["use_util_norm"]:

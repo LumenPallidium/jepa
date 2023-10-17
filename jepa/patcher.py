@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+from einops import rearrange
 from einops.layers.torch import Rearrange
 
 class ImagePatcher(torch.nn.Module):
@@ -43,6 +44,60 @@ class ImagePatcher(torch.nn.Module):
     
     def inverse(self, x):
         return self.inverse_layer(x)
+    
+class ConvPatcher(torch.nn.Module):
+    def __init__(self,
+                 h,
+                 w = None,
+                 in_channels = 3,
+                 out_channels = 3,
+                 patch_size = 4,):
+        super().__init__()
+        if w is None:
+            w = h
+        self.h = h
+        self.w = w
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+
+        self.patch_size = patch_size
+        self.num_patches = (h // patch_size) * (w // patch_size)
+        self.h_patched = h // patch_size
+        self.w_patched = w // patch_size
+
+        self.conv = torch.nn.Conv2d(in_channels = in_channels,
+                                    out_channels = out_channels,
+                                    kernel_size = patch_size,
+                                    stride = patch_size)
+        self.upsample = torch.nn.Upsample(scale_factor = patch_size)
+        self.out_conv = torch.nn.Conv2d(in_channels = out_channels,
+                                        out_channels = in_channels,
+                                        kernel_size = 2 * patch_size - 1,
+                                        padding = "same")
+        
+    def forward(self, x):
+        patches = self.conv(x)
+        return rearrange(patches, "b c h w -> b (h w) c")
+    
+    def inverse(self, x):
+        x = rearrange(x, "b (h w) c -> b c h w", 
+                      h = self.h_patched, 
+                      w = self.w_patched)
+        x = self.upsample(x)
+        x = self.out_conv(x)
+        return x
+    
+    def mask_inverse(self, x):
+        batch_size = x.shape[0]
+        x = rearrange(x, "b (h w) -> b h w", 
+                      h = self.h_patched, 
+                      w = self.w_patched)
+        # upsampling innacurate for bools converted to floats, so we do this
+        x = x.unsqueeze(-1).unsqueeze(-1)
+        x = x.repeat_interleave(self.patch_size, dim=-1)
+        x = x.repeat_interleave(self.patch_size, dim=-2)
+        x = x.reshape(batch_size, 1, self.h, self.w)
+        return x
     
 class ImagePatcher3D(torch.nn.Module):
     """Similar to above, but 3D. Theoretically could make a general ND patcher
