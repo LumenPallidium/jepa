@@ -1,7 +1,17 @@
 # JEPA
 (Update 6/13/2023) Meta just released and open-sourced [their implementation of I-JEPA](https://github.com/facebookresearch/ijepa). A bittersweet moment for me!
 
-This repository contains my experiments with Joint Embedding Predictive Architectures (JEPAs). It contains my barebones implementation of [I-JEPA (Image-JEPA)](https://arxiv.org/abs/2301.08243), which is this general architecture applied to the image domain. I've included a variant matching the paper, which uses a ViT and one that uses an energy transformer. 
+This repository contains my experiments with Joint Embedding Predictive Architectures (JEPAs) and self-supervised learning (SSL). It contains my barebones implementation of [I-JEPA (Image-JEPA)](https://arxiv.org/abs/2301.08243), which is this general architecture applied to the image domain. I've included a variant matching the paper, which uses a ViT and one that uses an energy transformer. The repository name is not perfectly accurate: this repository also contains related SSL implementations like masked autoencoders, including one based on self-distillation.
+
+I've also implemented a variant of my own I call the Saccade JEPA. It can either use a ViT or a more traditional neural network (Convnet, etc) as a backbone. It is essentially based on saccades in mammals: the eyes are constantly jittering and internally the brain predicts how this will affect the visual scene. This small augmentation (movement) and prediction task is a lot like a JEPA.
+
+In particular, the Saccade JEPA features a few loss types:
+
+* Prediction loss: Huber loss between an encoding of a target image and a prediction of it from a shifted (rotation + translation) version of it *with* an positional embedding that tells the predictor network the direction and rotation of the shift
+* Cycle consistency loss: Shifting back to the original location should reproduce the original image representation, so this loss term ensures this does indeed happen
+* VICReg loss: The invariance and covariance parts of the VICReg loss are implemented here.
+
+Saccade JEPA is "plug-and-play" with different architectures. I use a ConvNext model as the teacher and student networks, with a MLP serving as the predictor.
 
 ## Getting started
 The main libraries you will need are torch, torchvision, einops, and tqdm. Plotting (which is optional) uses matplotlib and UMAP. I will add a requirements or environment file soon but am holding off as things are still WIP. To run, use the jepa/train.py file.
@@ -23,7 +33,7 @@ In this way, the model learns the structure of image, all while working in an em
 
 I ran the model on Imagenet for 21 epochs (with 1.2M images per epoch). Note that the paper trains for 300 epochs, but I can't do that on my single GPU in any reasonable amount of time :).
 
-Due to self-superivsed objective, it's hard to evaluate how the JEPA is learning with e.g. validation or test set loss. I used several methods to evaluate the model. Like the paper, one such method was linear probes and KNN to test a frozen version of the model on Imagenet classification accuracy. Ideally, the model forms semantically-rich representation that will enable linear probes and KNN to perform well on classification.
+Due to the self-superivsed objective, it's hard to evaluate how the JEPA is learning with e.g. validation or test set loss. I used several methods to evaluate the model. Like the paper, one such method was linear probes and KNN to test a frozen version of the model on Imagenet classification accuracy. Ideally, the model forms semantically-rich representation that will enable linear probes and KNN to perform well on classification.
 
 In addition to the metrics in the paper, I also looked into a few other metrics:
 

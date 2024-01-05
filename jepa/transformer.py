@@ -41,11 +41,15 @@ class Attention2d(torch.nn.Module):
                  dim,
                  n_heads = 8,
                  dropout = 0.,
-                 bias = False):
+                 bias = False,
+                 cross = False,
+                 flash_attention = False):
         super().__init__()
         self.dim = dim
         self.n_heads = n_heads
         self.dim_head = dim // n_heads
+        self.cross = cross
+        self.flash_attention = flash_attention
 
         self.dropout = dropout
         self.inner_dim = self.dim_head * n_heads
@@ -57,21 +61,31 @@ class Attention2d(torch.nn.Module):
         self.W_v = torch.nn.Linear(dim, self.inner_dim, bias = bias)
         self.W_o = torch.nn.Linear(self.inner_dim, dim, bias = bias)
 
+        if self.flash_attention:
+            self.mha = torch.nn.MultiheadAttention(dim, n_heads, dropout = dropout, batch_first=True)
+
         self.dropout = torch.nn.Dropout(dropout)
 
-    def forward(self, x):
+    def forward(self, x, y = None):
         """Input shape is (batch, seq_len, dim)"""
         x = self.norm(x)
 
-        q, k, v = self.W_q(x), self.W_k(x), self.W_v(x)
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = self.n_heads), (q, k, v))
+        if self.cross and (not y is None):
+            q, k, v = self.W_q(x), self.W_k(y), self.W_v(y)
+        else:
+            q, k, v = self.W_q(x), self.W_k(x), self.W_v(x)
+        
+        if self.flash_attention:
+            output = self.mha(q, k, v)[0]
+        else:
+            q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = self.n_heads), (q, k, v))
 
-        attention = torch.einsum("b h i k, b h j k -> b h i j", q, k)
-        attention = attention / (self.dim_head ** 0.5)
-        attention = self.dropout(attention.softmax(dim = -1))
+            attention = torch.einsum("b h i k, b h j k -> b h i j", q, k)
+            attention = attention / (self.dim_head ** 0.5)
+            attention = self.dropout(attention.softmax(dim = -1))
 
-        output = torch.einsum("b h i j, b h j k -> b h i k", attention, v)
-        output = rearrange(output, "b h n d -> b n (h d)")
+            output = torch.einsum("b h i j, b h j k -> b h i k", attention, v)
+            output = rearrange(output, "b h n d -> b n (h d)")
         output = self.W_o(output)
 
         return self.dropout(output)
@@ -150,52 +164,65 @@ class Transformer(torch.nn.Module):
                  dim = 512, 
                  depth = 4, 
                  heads = 8, 
-                 dropout = 0.,
-                 positional_embedding= True,
+                 dropout = 0.4,
+                 positional_embedding = True,
                  context = None,
                  activation = torch.nn.GELU,
-                 ema_decay = 0.996,):
+                 ema_decay = 0.996,
+                 first_layer_norm = True,
+                 cross = False,
+                 flash_attention = False):
         super().__init__()
 
         self.dim = dim
         self.depth = depth
         self.heads = heads
+        self.cross = cross
 
         self.ema_decay = ema_decay
 
         self.has_util_norm = False
 
-        if positional_embedding:
-            assert context is not None, "Context must be provided if positional embedding is used"
+        if first_layer_norm:
+            self.norm = torch.nn.LayerNorm(dim)
+        else:
+            self.norm = torch.nn.Identity()
+
+        if positional_embedding and (context is not None):
             self.pos_embedding = torch.nn.Parameter(torch.randn(1, context, dim))
         else:
-            self.pos_embedding = torch.zeros(1, 1, dim)
+            self.register_buffer("pos_embedding", torch.zeros(1, 1, dim))
 
         self.layers = torch.nn.ModuleList([])
         for _ in range(depth):
             self.layers.append(torch.nn.ModuleList([
-                Attention2d(dim, n_heads = heads, dropout = dropout),
+                Attention2d(dim, n_heads = heads, dropout = dropout, cross = cross,
+                            flash_attention = flash_attention),
                 FeedForward(dim, dim, dropout = dropout, activation = activation)
             ]))
 
-    def forward(self, x):
-        x = x + self.pos_embedding
+    def forward(self, x, y = None, stop_at = None, pos_embedding = None):
+        """Transformer forward. Can stop at a certain layer for layer-dropout,
+        as well as be supplied with a positional embedding (e.g. for shared
+        positional embeddings between models)"""
+        if pos_embedding is None:
+            pos_embedding = self.pos_embedding
+        x = self.norm(x) + pos_embedding
 
-        for attention, ff in self.layers:
-            x = x + attention(x)
+        for i, (attention, ff) in enumerate(self.layers):
+            x = x + attention(x, y = y)
             x = x + ff(x)
+
+            y = None # disable cross attention after first layer
+            if (stop_at is not None) and (i >= (stop_at - 1)):
+                break
         return x
     
     def filtered_forward(self, x, indices):
         """Given a tensor of the form [masked target, context] and indices describing where on the image
         they come from, add positional embedding and pass through the transformer."""
         pos_embedding = self.pos_embedding[:, indices, :]
-
-        x = x + pos_embedding
-        for attention, ff in self.layers:
-            x = x + attention(x)
-            x = x + ff(x)
-        return x
+        return self.forward(x, pos_embedding = pos_embedding)
     
     def get_attentions(self, x):
         """Modified forward for just getting the output of the nth attention layers, for use in the

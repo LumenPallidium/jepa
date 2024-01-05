@@ -203,7 +203,7 @@ if __name__ == "__main__":
                                 [1, 2, 1]], device = device, dtype = torch.float32) / 16
 
     jepa_model, _, _ = get_model(config, device)
-    _, sj = list(jepa_model.target_encoder.named_children())[0]
+    sj = jepa_model.target_encoder
 
     x = torch.rand(1, 3, 500, 500, device = device)
 
@@ -214,8 +214,8 @@ if __name__ == "__main__":
         #resnet = torchvision.models.resnet50(weights = torchvision.models.ResNet50_Weights.IMAGENET1K_V2).to(device).requires_grad_(False)
         inception = torchvision.models.inception_v3(weights = torchvision.models.Inception_V3_Weights.IMAGENET1K_V1,
                                                     ).to(device).requires_grad_(False)
-        y = deepdream_octaves(x, inception, 
-                              layer_n = 10,  
+        y = deepdream_octaves(x, sj, 
+                              layer_n = 1,  
                               channel = 1,
                               neuron_idx_i = 0,
                               neuron_idx_j = 0,
@@ -223,9 +223,9 @@ if __name__ == "__main__":
                               leafs_or_children = "children")
         tensor2im(y.squeeze(0))
 
-        x = torch.rand(1, 3, 224, 224, device = device)
+        x = torch.rand(1, 3, 299, 299, device = device)
         y = deepdream_octaves(x, sj, 
-                              layer_n = 13, 
+                              layer_n = 1, 
                               blur_kernel = blur_kernel,
                               leafs_or_children = "children")
         tensor2im(y.squeeze(0))

@@ -1,4 +1,5 @@
 import os
+from sympy.ntheory import factorint
 
 class WarmUpScheduler(object):
     """Copilot wrote this, made some small tweaks though."""
@@ -47,4 +48,30 @@ def get_latest_file(path, name):
 def ema_update(updated_model, new_model, ema_decay = 0.996):
     for ema_param, new_param in zip(updated_model.parameters(), new_model.parameters()):
         ema_param.data.copy_(ema_param.data * ema_decay + (1 - ema_decay) * new_param.data)
+        ema_param.requires_grad_(False)
     return updated_model
+
+def tuple_checker(item, length):
+    """Checks if an item is a tuple or list, if not, converts it to a list of length length.
+    Also checks that an input tuple is the correct length.
+    Useful for giving a function a single item when it requires a iterable."""
+    if isinstance(item, (int, float, str)):
+        item = [item] * length
+    elif isinstance(item, (tuple, list)):
+        assert len(item) == length, f"Expected tuple of length {length}, got {len(item)}"
+    return item
+
+def approximate_square_root(x):
+    factor_dict = factorint(x)
+    factors = []
+    for key, item in factor_dict.items():
+        factors += [key] * item
+    factors = sorted(factors)
+
+    a, b = 1, 1
+    for factor in factors:
+        if a <= b:
+            a *= factor
+        else:
+            b *= factor
+    return a, b
